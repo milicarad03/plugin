@@ -1,12 +1,63 @@
-import { Injectable,ForbiddenException,NotFoundException , ConflictException, InternalServerErrorException} from "@nestjs/common";
+import { Inject,Injectable,OnModuleInit, OnModuleDestroy,ForbiddenException,NotFoundException , ConflictException, InternalServerErrorException} from "@nestjs/common";
 import { DeviceDashboardRepository } from "./device-dashboard.repository";
-@Injectable()
-export class DeviceDashboardService {
-    private repository :DeviceDashboardRepository;
+import { DEVICE_DASHBOARD_OPTIONS} from "../device-registry.interface"
+import type  { DeviceDashboardModuleOptions} from "../device-registry.interface"
+import { MqttDevicePlugin } from "src/MqttDevicePlugin";
+export type DeviceTelemetry = {
+  deviceId: string;
+  timestamp: string;
+  data: Record<string, unknown>;
 
-    constructor(prisma:any){
-        this.repository= new DeviceDashboardRepository(prisma);
+};
+
+@Injectable()
+export class DeviceDashboardService implements OnModuleInit, OnModuleDestroy {
+    private mqttPlugin:MqttDevicePlugin;
+   
+    constructor(
+        @Inject(DEVICE_DASHBOARD_OPTIONS)
+        private readonly options: DeviceDashboardModuleOptions,
+    ){
+        
+    this.mqttPlugin = new MqttDevicePlugin(
+      this.options.brokerUrl,
+      this.options.findDeviceById,
+    );
+    ;}
+    onModuleInit() {
+        console.log('[PLUGIN] DeviceDashboardService initialized');
+        this.mqttPlugin.connect();
     }
+
+    onModuleDestroy() {
+        console.log('[PLUGIN] DeviceDashboardService destroyed');
+        this.mqttPlugin.disconnect();
+    }
+
+    async approveDevice(device: DeviceTelemetry): Promise <boolean> {
+        const dev= await this.options.findDeviceById(device.deviceId);
+        
+        if(!dev){
+            console.warn("[PLUGIN] this device does not exist", device.deviceId)
+            return false;
+        }
+        console.log("[PLUGIN] device approved", device.deviceId)
+        return true;
+    }
+    async checkDevice(deviceId: string) {
+    const device = await this.options.findDeviceById(deviceId);
+
+    if (!device) {
+      console.log('[PLUGIN] Device does not exist:', deviceId);
+      return null;
+    }
+
+    console.log('[PLUGIN] Device exists:', device);
+    return device;
+  }
+  
+
+    
     
     getPluginStatus(deviceId:string){
 
@@ -33,29 +84,5 @@ export class DeviceDashboardService {
         ];
     }
 
-    async createDevice(data:any, targetUserId:number){
-        console.log("plugin kreira uredjaj ", data.name);
-        if(!data.name) throw new Error("Device name required!");
-      
-
-        try{
-            return await this.repository.create({
-           data :{ 
-            serialNumber : data.serialNumber,
-            name:data.name || 'unnamed device',
-            type:data.type || 'GENERIC',
-             user: {
-                connect: { id: targetUserId}
-             },
-           }
-        })
-        }catch(error:any){
-            console.error('DETALJNA GREŠKA:', error);
-            if(error.code ==='P2002'){
-                    throw new ConflictException('DEVICE_SERIAL_ALREADY_EXISTS');
-            }
-            throw new InternalServerErrorException('DATABASE_CONNECTION_ERROR');
-        }
-
-    }
+   
 }

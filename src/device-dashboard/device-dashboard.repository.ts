@@ -11,5 +11,12 @@ export class DeviceDashboardRepository {
         }
         return this.prisma.device.create(finalData);
     }
+     async findOne(where: any) {
+        return this.prisma.device.findUnique({
+            where,
+            include:{ user:true }
+
+        });
+    }
 
 }
