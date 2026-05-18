@@ -20,8 +20,8 @@ export class MqttDevicePlugin {
 
   constructor(
     private readonly brokerUrl: string,
-    //private deviceRegistry:DeviceRegistry,
      private readonly findByDeviceId: (deviceId: string) => Promise<RegisteredDevice | null>,
+     private readonly onTelemetry?:(telemetry:DeviceTelemetry)=> Promise <void> | void,
   ) {}
 
   connect() {
@@ -87,6 +87,7 @@ export class MqttDevicePlugin {
 
         console.log('[PLUGIN] Telemetry approved for:', device.serialNumber);
         console.log('[PLUGIN] Telemetry data:', telemetry.data);
+        await this.onTelemetry?.(telemetry);
 
         return;
       }

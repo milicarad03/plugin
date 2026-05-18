@@ -22,6 +22,7 @@ export class DeviceDashboardService implements OnModuleInit, OnModuleDestroy {
     this.mqttPlugin = new MqttDevicePlugin(
       this.options.brokerUrl,
       this.options.findDeviceById,
+      this.options.onTelemetry,
     );
     ;}
     onModuleInit() {
