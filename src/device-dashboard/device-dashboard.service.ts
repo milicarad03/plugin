@@ -1,80 +1,62 @@
-import { Inject,Injectable,OnModuleInit, OnModuleDestroy,ForbiddenException,NotFoundException , ConflictException, InternalServerErrorException} from "@nestjs/common";
-import { DeviceDashboardRepository } from "./device-dashboard.repository";
-import { DEVICE_DASHBOARD_OPTIONS} from "../device-registry.interface"
-import type  { DeviceDashboardModuleOptions} from "../device-registry.interface"
-import { MqttDevicePlugin } from "src/MqttDevicePlugin";
-export type DeviceTelemetry = {
+// serverplugin/src/device-dashboard/device-dashboard.service.ts
+
+import { Inject, Injectable } from "@nestjs/common";
+import { DEVICE_DASHBOARD_OPTIONS } from "../device-registry.interface";
+import type { DeviceDashboardModuleOptions, DeviceTelemetry } from "../device-registry.interface";
+
+export type DeviceStatus = {
   deviceId: string;
   timestamp: string;
-  data: Record<string, unknown>;
-
+  status: string;
 };
 
 @Injectable()
-export class DeviceDashboardService implements OnModuleInit, OnModuleDestroy {
-    private mqttPlugin:MqttDevicePlugin;
+export class DeviceDashboardService {
    
     constructor(
         @Inject(DEVICE_DASHBOARD_OPTIONS)
         private readonly options: DeviceDashboardModuleOptions,
-    ){
-        
-    this.mqttPlugin = new MqttDevicePlugin(
-      this.options.brokerUrl,
-      this.options.findDeviceById,
-      this.options.onTelemetry,
-    );
-    ;}
-    onModuleInit() {
-        console.log('[PLUGIN] DeviceDashboardService initialized');
-        this.mqttPlugin.connect();
-    }
+    ) {}
 
-    onModuleDestroy() {
-        console.log('[PLUGIN] DeviceDashboardService destroyed');
-        this.mqttPlugin.disconnect();
-    }
+    
+    async processTelemetry(telemetry: DeviceTelemetry): Promise<{ approved: boolean; reason?: string }> {
+        console.log('[PLUGIN] Primljen zahtev za procesiranje telemetrije:', telemetry.deviceId);
 
-    async approveDevice(device: DeviceTelemetry): Promise <boolean> {
-        const dev= await this.options.findDeviceById(device.deviceId);
+        const device = await this.options.findDeviceById(telemetry.deviceId);
         
-        if(!dev){
-            console.warn("[PLUGIN] this device does not exist", device.deviceId)
-            return false;
+        if (!device) {
+            console.warn("[PLUGIN] Telemetrija odbijena. Uređaj ne postoji u bazi:", telemetry.deviceId);
+            return { approved: false, reason: "DEVICE_NOT_FOUND" };
         }
-        console.log("[PLUGIN] device approved", device.deviceId)
-        return true;
-    }
-    async checkDevice(deviceId: string) {
-    const device = await this.options.findDeviceById(deviceId);
 
-    if (!device) {
-      console.log('[PLUGIN] Device does not exist:', deviceId);
-      return null;
+        console.log("[PLUGIN] Uređaj odobren:", device.serialNumber);
+
+        if (this.options.onTelemetry) {
+            await this.options.onTelemetry(telemetry);
+        }
+
+        return { approved: true };
     }
 
-    console.log('[PLUGIN] Device exists:', device);
-    return device;
-  }
   
-
-    
-    
-    getPluginStatus(deviceId:string){
-
-        return{
-            id:deviceId,
-            pluginName:"DeviceDashboard",
-            active:true,
-            version:'1.0.0'
-
-        };
+    async processStatus(status: DeviceStatus): Promise<void> {
+        console.log('[PLUGIN] Primljen status uređaja na obradu:', status.deviceId, '->', status.status);
+        
     }
-    getDashboardConfig(){
-        return{
-            theme: "cyberpunk",
-            widgets:['battery', 'signal', 'uptime']
-        };
+
+    
+    async checkDevice(deviceId: string) {
+        const device = await this.options.findDeviceById(deviceId);
+        if (!device) return null;
+        return device;
+    }
+  
+    getPluginStatus(deviceId: string) {
+        return { id: deviceId, pluginName: "DeviceDashboard", active: true, version: '1.0.0' };
+    }
+
+    getDashboardConfig() {
+        return { theme: "cyberpunk", widgets: ['battery', 'signal', 'uptime'] };
     }
    
     getDevices() {
@@ -84,6 +66,4 @@ export class DeviceDashboardService implements OnModuleInit, OnModuleDestroy {
             { id: 3, name: 'IP Kamera', status: 'online' }
         ];
     }
-
-   
 }
