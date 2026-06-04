@@ -1,66 +1,35 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Device Simulator Configuration",
-  "description": "Schema for validating simulated IoT device telemetry data.",
+  "title": "Temperature Sensor Telemetry Event",
+  "description": "Schema for validating one telemetry event received by the plugin.",
   "type": "object",
-  "required": ["deviceId", "intervalMs", "telemetry"],
+  "required": ["deviceId"],
   "properties": {
     "deviceId": {
       "type": "string",
-      "description": "Unique identifier of the simulated IoT device.",
-      "minLength": 1,
-      "examples": ["device-001"]
+      "minLength": 1
     },
-    "intervalMs": {
-      "type": "integer",
-      "description": "Interval in milliseconds between two telemetry messages.",
-      "minimum": 1000,
-      "examples": [5000]
+    "temperature": {
+      "type": "number",
+      "minimum": -10,
+      "maximum": 35
     },
-    "telemetry": {
-      "type": "array",
-      "description": "List of telemetry values that will be sent periodically.",
-      "minItems": 1,
-      "items": {
-        "type": "object",
-        "required": ["temperature", "humidity", "pressure", "led"],
-        "properties": {
-          "temperature": {
-            "type": "number",
-            "description": "Temperature value measured by the simulated device.",
-            "minimum": -10,
-            "maximum": 35,
-            "examples": [22.5]
-          },
-          "humidity": {
-            "type": "number",
-            "description": "Humidity percentage measured by the simulated device.",
-            "minimum": 0,
-            "maximum": 100,
-            "examples": [45]
-          },
-          "pressure": {
-            "type": "number",
-            "description": "Atmospheric pressure measured by the simulated device.",
-            "minimum": 300,
-            "maximum": 1100,
-            
-            "examples": [1012]
-          },
-          "led": {
-            "type": "boolean",
-            "description": "Current simulated LED state.",
-            "examples": [false]
-          },
-          "mode": {
-            "type": "string",
-            "description": "Operating mode of the simulated device.",
-            "examples": ["AUTO"]
-          }
-        },
-        "additionalProperties": false
-      }
+    "humidity": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "pressure": {
+      "type": "number",
+      "minimum": 300,
+      "maximum": 1100
+    },
+    "led": {
+      "type": "boolean"
+    },
+    "mode": {
+      "type": "string"
     }
   },
-  "additionalProperties": false
+  "additionalProperties": true
 }
