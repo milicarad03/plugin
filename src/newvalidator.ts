@@ -1,48 +1,30 @@
 import Ajv2020 from "ajv/dist/2020";
-import fs from "fs";
-import path from "path";
 
 const ajv = new Ajv2020({ allErrors: true });
 
-//  cache da ne kompilira svaki put
-const validatorCache = new Map<string, any>();
+// cache po schema objektu
+const validatorCache = new WeakMap<object, any>();
 
-function getSchemaPath(deviceId: string) {
-  return path.join(process.cwd(), "schema", deviceId, "schema.json");
-}
-
-function getValidator(deviceId: string) {
-  if (validatorCache.has(deviceId)) {
-    return validatorCache.get(deviceId);
+function getValidator(schema: object) {
+  if (validatorCache.has(schema)) {
+    return validatorCache.get(schema);
   }
-
-  const schemaPath = getSchemaPath(deviceId);
-
-  console.log("[SCHEMA] schema path:", schemaPath);
-
-
-  if (!fs.existsSync(schemaPath)) {
-    throw new Error(`[SCHEMA] Missing schema for device: ${deviceId}`);
-  }
-
-  const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
 
   const validator = ajv.compile(schema);
-
-  validatorCache.set(deviceId, validator);
+  validatorCache.set(schema, validator);
 
   return validator;
 }
 
 export function validateTelemetryPayload(
-  deviceId: string,
+  schema: any,
   message: unknown
 ): {
   valid: boolean;
   errors: string[];
 } {
   try {
-    const validate = getValidator(deviceId);
+    const validate = getValidator(schema);
 
     const valid = validate(message);
 

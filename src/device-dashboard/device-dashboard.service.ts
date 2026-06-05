@@ -14,6 +14,8 @@ import { validateTelemetryPayload } from "src/newvalidator";
 import { normalizeUnknownDeviceModel } from "src/telemetry-normalizer";
 import { LazyModuleLoader } from "@nestjs/core";
 import { normalizeWithMapping } from "src/mapping-normalizer";
+import { MappingDefinition } from "src/mapping-normalizer";
+
 
 function loadMapping(deviceId: string) {
   const filePath = path.join(process.cwd(), "schema", deviceId,"mapper.json");
@@ -64,17 +66,6 @@ export class DeviceDashboardService {
         reason: "MISSING_DEVICE_IDENTIFIER",
       };
     }
-    const validation = validateTelemetryPayload(deviceId,message);
-
-    if (!validation.valid) {
-      console.warn("[PLUGIN] Payload odbijen. Nevalidna struktura.");
-      console.warn("[PLUGIN] Validation errors:", validation.errors);
-
-      return {
-        approved: false,
-        reason: "INVALID_TELEMETRY_SCHEMA",
-      };
-    }
 
     const device = await this.options.findDeviceById(deviceId);
 
@@ -86,7 +77,49 @@ export class DeviceDashboardService {
         reason: "DEVICE_NOT_FOUND",
       };
     }
-    const mapping=loadMapping(deviceId);
+    if (!device.model) {
+      return {
+        approved: false,
+        reason: "MISSING_MODEL_VERSION",
+      };
+    }
+
+    const map=device.mapping;
+    const mapping = map as MappingDefinition;
+
+    const sch=device.schema;
+
+    if (!map) {
+      return {
+        approved: false,
+        reason: "MISSING_MAPPING",
+      };
+    }
+
+    if (!sch) {
+      return {
+        approved: false,
+        reason: "MISSING_SCHEMA",
+      };
+    }
+
+
+  
+
+    const validation = validateTelemetryPayload(sch,message);
+
+    if (!validation.valid) {
+      console.warn("[PLUGIN] Payload odbijen. Nevalidna struktura.");
+      console.warn("[PLUGIN] Validation errors:", validation.errors);
+
+      return {
+        approved: false,
+        reason: "INVALID_TELEMETRY_SCHEMA",
+      };
+    }
+
+    
+    //const mapping=loadMapping(deviceId);
     const telemetry=normalizeWithMapping(message,deviceId,mapping);
 
 

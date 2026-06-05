@@ -1,4 +1,4 @@
-type MappingDefinition = {
+export type MappingDefinition = {
   fields: Record<string,{path: string;}>;
 };
 

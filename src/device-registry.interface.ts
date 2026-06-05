@@ -1,3 +1,5 @@
+import { MappingDefinition } from "src/mapping-normalizer";
+
 
 
 export type RegisteredDevice = {
@@ -5,6 +7,14 @@ export type RegisteredDevice = {
   serialNumber: string;
   name?: string | null;
   type?: string | null;
+
+ // modelVersionId?: string | null;
+  model?: string | null;
+  version?: string | null;
+
+  schema?: any;   
+  mapping?: any;
+
 };
 export type DeviceTelemetry = {
   deviceId: string;
