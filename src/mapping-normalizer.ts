@@ -1,3 +1,13 @@
+import { Logger } from "@nestjs/common";
+//const logger = new Logger("MappingNormalizer");
+class PluginLogger extends Logger {
+  override debug(message: string) {
+    if (process.env.LOG_LEVEL === 'debug') {
+      super.debug(message);
+    }
+  }
+}
+const logger = new PluginLogger("MappingNormalizer");
 export type MappingDefinition = {
   fields: Record<string,{path: string;}>;
 };
@@ -19,10 +29,12 @@ export function normalizeWithMapping(
   mapping: MappingDefinition
 ) {
   if (!message || typeof message !== "object") {
+    logger.warn(`[MAPPER] Normalization aborted for device ${deviceId}: Message is not a valid object.`);
     return null;
   }
 
   const data: Record<string, unknown> = {};
+  logger.debug(`[MAPPER] Starting data extraction for device: ${deviceId}`);
 
   for (const targetKey of Object.keys(mapping.fields)) {
     const { path } = mapping.fields[targetKey];
@@ -31,6 +43,9 @@ export function normalizeWithMapping(
 
     if (value !== undefined) {
       data[targetKey] = value;
+      logger.debug(`[MAPPER] Extracted: "${targetKey}" from path "${path}" -> Value: ${JSON.stringify(value)}`);
+    }else {
+      logger.debug(`[MAPPER] Missing field in payload: Path "${path}" for target key "${targetKey}" resolved to undefined.`);
     }
   }
 

@@ -3,7 +3,7 @@
 import fs from "fs";
 import path from "path";
 
-import { Inject, Injectable } from "@nestjs/common";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 import {
   DEVICE_DASHBOARD_OPTIONS,
   type DeviceDashboardModuleOptions,
@@ -47,6 +47,14 @@ export type DeviceStatus = {
   timestamp?: string;
   status: string;
 };
+class PluginLogger extends Logger {
+  override debug(message: string) {
+    if (process.env.LOG_LEVEL === 'debug') {
+      super.debug(message);
+    }
+  }
+}
+
 
 @Injectable()
 export class DeviceDashboardService {
@@ -54,30 +62,49 @@ export class DeviceDashboardService {
     @Inject(DEVICE_DASHBOARD_OPTIONS)
     private readonly options: DeviceDashboardModuleOptions,
   ) {}
+  private readonly logger = new PluginLogger(DeviceDashboardService.name);
+  private deviceCache = new Map<string, { device: any; expiresAt: number }>();
+  private readonly DEVICE_TTL = 60 * 1000;
 
   async processTelemetry(message: unknown,context: TelemetryContext): Promise<{ approved: boolean; reason?: string }> {
-    console.log("[PLUGIN] Primljen raw telemetry payload za procesiranje");
-
+   
     const deviceId = context.deviceId;
 
+    this.logger.debug(`[START] Received telemetry for device : ${deviceId || "UNKNOWN"}`);
+
     if (!deviceId) {
+      this.logger.warn("[DENIED] Missing deviceId in message context.");
       return {
         approved: false,
         reason: "MISSING_DEVICE_IDENTIFIER",
       };
     }
+    const now=Date.now();
 
-    const device = await this.options.findDeviceById(deviceId);
+    let cached = this.deviceCache.get(deviceId);
+    let device;
+
+  
+    if (cached && cached.expiresAt > now) {
+      this.logger.debug(`[DEVICE CACHE] HIT -> Device ${deviceId} found in memory.`);
+      device = cached.device;
+    } else {
+       this.logger.debug(`[DEVICE CACHE] MISS -> Fetching device ${deviceId} from database.`);
+    
+      device = await this.options.findDeviceById(deviceId);
+      
+      if (device) {
+        this.logger.log(`[DEVICE CACHE] Caching device ${deviceId} for the next ${this.DEVICE_TTL / 1000}s.`);
+        this.deviceCache.set(deviceId, {device, expiresAt: now + this.DEVICE_TTL});
+      }
+    }
 
     if (!device) {
-      console.warn("[PLUGIN] Payload odbijen. Uređaj ne postoji u bazi:", deviceId);
-
-      return {
-        approved: false,
-        reason: "DEVICE_NOT_FOUND",
-      };
+    this.logger.warn(`[DENIED] Device ${deviceId} does not exist in the database.`);
+      return { approved: false, reason: "DEVICE_NOT_FOUND" };
     }
     if (!device.model) {
+      this.logger.warn(`[DENIED] Device ${deviceId} has no assigned model version.`);
       return {
         approved: false,
         reason: "MISSING_MODEL_VERSION",
@@ -90,6 +117,7 @@ export class DeviceDashboardService {
     const sch=device.schema;
 
     if (!map) {
+      this.logger.warn(`[DENIED] Missing mapping definitions for version: ${device.model}`);
       return {
         approved: false,
         reason: "MISSING_MAPPING",
@@ -97,38 +125,39 @@ export class DeviceDashboardService {
     }
 
     if (!sch) {
+      this.logger.warn(`[DENIED] Missing JSON schema for version: ${device.model}`);
       return {
         approved: false,
         reason: "MISSING_SCHEMA",
       };
     }
-
-
-  
-
-    const validation = validateTelemetryPayload(sch,message);
+    this.logger.debug(`[VALIDATION] Running AJV structure check for model version: ${device.model}`);
+    const validation = validateTelemetryPayload(device.model,sch,message);
 
     if (!validation.valid) {
-      console.warn("[PLUGIN] Payload odbijen. Nevalidna struktura.");
-      console.warn("[PLUGIN] Validation errors:", validation.errors);
-
+      this.logger.warn(`[DENIED] Payload for device ${deviceId} failed JSON schema validation.`);
+      this.logger.warn(`[VALIDATION ERRORS]: ${JSON.stringify(validation.errors)}`);
       return {
         approved: false,
         reason: "INVALID_TELEMETRY_SCHEMA",
       };
     }
+    this.logger.log(`[VALIDATION] Success! Payload structure is valid.`);
+    this.logger.debug(`[NORMALIZATION] Transforming device data using defined mapping rules.`);
 
-    
-    //const mapping=loadMapping(deviceId);
     const telemetry=normalizeWithMapping(message,deviceId,mapping);
 
 
     if (!telemetry) {
+      this.logger.warn(`[DENIED] Data normalization failed for device: ${deviceId}`);
       return {
         approved: false,
         reason: "NORMALIZATION_FAILED",
       };
     }
+    this.logger.debug(`[NORMALIZATION] Transformation result: ${JSON.stringify(telemetry.data)}`);
+
+    this.logger.debug(`[SUCCESS] Forwarding normalized data to host application via onTelemetry hook...`);
 
     await this.options.onTelemetry?.(telemetry);
 
@@ -141,14 +170,15 @@ export class DeviceDashboardService {
     const deviceId = context.deviceId;
 
     if (!deviceId) {
-      console.warn("[PLUGIN] Status odbijen. Nedostaje deviceId u context-u.");
+     this.logger.warn("[STATUS] Device status rejected. Missing deviceId.");
+      
       return;
     }
 
     const statusObject = this.asRecord(statusPayload);
 
     if (!statusObject) {
-      console.warn("[PLUGIN] Status payload nije objekat.");
+      this.logger.warn(`[STATUS] Device ${deviceId} sent an invalid status object.`);
       return;
     }
 
@@ -158,7 +188,7 @@ export class DeviceDashboardService {
         ? statusObject.timestamp
         : new Date().toISOString();
 
-    console.log("[PLUGIN] Primljen status uređaja na obradu:", deviceId, "->", status);
+    this.logger.log(`[STATUS LOG] Device: ${deviceId} changed state -> ${status.toUpperCase()}`);
 
   }
 
