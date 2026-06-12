@@ -65,6 +65,7 @@ export class DeviceDashboardService {
   private readonly logger = new PluginLogger(DeviceDashboardService.name);
   private deviceCache = new Map<string, { device: any; expiresAt: number }>();
   private readonly DEVICE_TTL = 60 * 1000;
+  private readonly CACHE_TTL = 60;
 
   async processTelemetry(message: unknown,context: TelemetryContext): Promise<{ approved: boolean; reason?: string }> {
    
@@ -83,22 +84,38 @@ export class DeviceDashboardService {
 
     let cached = this.deviceCache.get(deviceId);
     let device;
+    const redisClient = this.options.redis;
 
-  
-    if (cached && cached.expiresAt > now) {
-      this.logger.debug(`[DEVICE CACHE] HIT -> Device ${deviceId} found in memory.`);
-      device = cached.device;
-    } else {
-       this.logger.debug(`[DEVICE CACHE] MISS -> Fetching device ${deviceId} from database.`);
-    
-      device = await this.options.findDeviceById(deviceId);
-      
-      if (device) {
-        this.logger.log(`[DEVICE CACHE] Caching device ${deviceId} for the next ${this.DEVICE_TTL / 1000}s.`);
-        this.deviceCache.set(deviceId, {device, expiresAt: now + this.DEVICE_TTL});
+    if (redisClient) {
+      try {
+        const cachedData = await redisClient.get(`cache:device:${deviceId}`);
+        if (cachedData) {
+          this.logger.debug(`[REDIS CACHE] HIT -> Device ${deviceId} profile loaded from Redis RAM.`);
+          device = JSON.parse(cachedData);
+        }
+      } catch (err: any) {
+        this.logger.error(`[REDIS CACHE] Error reading from Redis: ${err.message}`);
       }
     }
-
+    if(!device){
+      this.logger.debug(`[REDIS CACHE] MISS -> Fetching device ${deviceId} from database.`);
+      device = await this.options.findDeviceById(deviceId);
+  
+      if (device && redisClient) {
+          try {
+            this.logger.log(`[REDIS CACHE] Saving device ${deviceId} to Redis for ${this.CACHE_TTL}s.`);
+            await redisClient.set(
+              `cache:device:${deviceId}`, 
+              JSON.stringify(device), 
+              'EX', 
+              this.CACHE_TTL
+            );
+          } catch (err: any) {
+            this.logger.error(`[REDIS CACHE] Error saving to Redis: ${err.message}`);
+          }
+        }
+    }
+    
     if (!device) {
     this.logger.warn(`[DENIED] Device ${deviceId} does not exist in the database.`);
       return { approved: false, reason: "DEVICE_NOT_FOUND" };

@@ -10,9 +10,9 @@ class PluginLogger extends Logger {
   }
 }
 
-// Keš memorija sa string ključem (modelVersionId)
+
 const validatorCache = new Map<string, any>();
-// Maksimalno čuvamo 50 unikatnih verzija šema u memoriji istovremeno
+
 const MAX_CACHE_SIZE = 50; 
 const logger = new PluginLogger("ValidatorCache");
 function getValidator(cacheKey: string, schema: object) {
