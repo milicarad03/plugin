@@ -28,6 +28,7 @@ export type DeviceDashboardModuleOptions = {
   findDeviceById: (deviceId: string) => Promise<RegisteredDevice | null>;
   onTelemetry?:(telemetry:DeviceTelemetry)=> Promise <void> | void;
   redis? : any;
+  onStatusChange?: (deviceId: string, status: string) => Promise<void>;
 };
 export interface DeviceRegistry {
     findByDeviceId(deviceId:string):Promise<RegisteredDevice| null> ;

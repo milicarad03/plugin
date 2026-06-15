@@ -204,9 +204,19 @@ export class DeviceDashboardService {
       typeof statusObject.timestamp === "string"
         ? statusObject.timestamp
         : new Date().toISOString();
+    
+    const normalizedStatus=status.toUpperCase();
 
     this.logger.log(`[STATUS LOG] Device: ${deviceId} changed state -> ${status.toUpperCase()}`);
 
+    if (this.options.onStatusChange) {
+      try {
+        await this.options.onStatusChange(deviceId, normalizedStatus);
+        this.logger.debug(`[STATUS] Status hook successfully executed for device: ${deviceId}`);
+      } catch (err: any) {
+        this.logger.error(`[STATUS] Error executing status hook: ${err.message}`);
+      }
+    }
   }
 
   async checkDevice(deviceId: string) {
