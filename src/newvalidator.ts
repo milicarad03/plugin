@@ -48,12 +48,18 @@ function getValidator(cacheKey: string, schema: object) {
 export function validateTelemetryPayload(
   cacheKey: string,
   schema: any,
-  message: unknown
+  message: any
 ): {
   valid: boolean;
   errors: string[];
 } {
   try {
+    if (message.schemaId !== cacheKey) {  //DODATO
+      return { 
+        valid: false, 
+        errors: [`Schema ID mismatch: expected ${cacheKey}, got ${message.schemaId}`] 
+      };
+    }
     const validate = getValidator(cacheKey, schema);
 
     const valid = validate(message);

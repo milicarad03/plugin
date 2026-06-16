@@ -148,8 +148,26 @@ export class DeviceDashboardService {
         reason: "MISSING_SCHEMA",
       };
     }
+
+    if (sch.properties?.schemaId?.const !== device.model) {
+      this.logger.error(
+        `[CONFIG MISMATCH] Device ${deviceId} is assigned to model '${device.model}', ` +
+        `but its schema expects '${sch.properties?.schemaId?.const}'.`
+      );
+      return { 
+        approved: false, 
+        reason: "CONFIGURATION_MISMATCH" 
+      };
+    }
+
     this.logger.debug(`[VALIDATION] Running AJV structure check for model version: ${device.model}`);
-    const validation = validateTelemetryPayload(device.model,sch,message);
+    
+    const messageWithId = {
+      schemaId: device.model, // Koristimo model iz baze kao garantovani ID
+      ...(message as Record<string, any>) 
+    };
+        
+    const validation = validateTelemetryPayload(device.model,sch,messageWithId);
 
     if (!validation.valid) {
       this.logger.warn(`[DENIED] Payload for device ${deviceId} failed JSON schema validation.`);
