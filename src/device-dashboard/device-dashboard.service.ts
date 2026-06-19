@@ -70,7 +70,14 @@ export class DeviceDashboardService {
   async processTelemetry(message: unknown,context: TelemetryContext): Promise<{ approved: boolean; reason?: string }> {
    
     const deviceId = context.deviceId;
-
+    if (this.deviceCache.size >= 1000) {
+    const firstKey = this.deviceCache.keys().next().value;
+  
+    if (firstKey !== undefined) {
+      this.deviceCache.delete(firstKey);
+      this.logger.debug(`[CACHE] Evicted oldest entry from deviceCache: ${firstKey}`);
+    }
+  }
     this.logger.debug(`[START] Received telemetry for device : ${deviceId || "UNKNOWN"}`);
 
     if (!deviceId) {
@@ -163,7 +170,7 @@ export class DeviceDashboardService {
     this.logger.debug(`[VALIDATION] Running AJV structure check for model version: ${device.model}`);
     
     const messageWithId = {
-      schemaId: device.model, // Koristimo model iz baze kao garantovani ID
+      schemaId: device.model, 
       ...(message as Record<string, any>) 
     };
         
