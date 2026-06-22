@@ -1,7 +1,7 @@
 import Ajv2020 from "ajv/dist/2020";
 import { Logger } from "@nestjs/common";
 
-const ajv = new Ajv2020({ allErrors: true });
+export const ajv = new Ajv2020({ allErrors: true });
 class PluginLogger extends Logger {
   override debug(message: string) {
     if (process.env.LOG_LEVEL === 'debug') {
@@ -82,4 +82,7 @@ export function validateTelemetryPayload(
       errors: [err.message],
     };
   }
+}
+export function clearValidatorCache() {
+  validatorCache.clear();
 }

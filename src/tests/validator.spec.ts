@@ -1,5 +1,5 @@
-const { validateTelemetryPayload } = require("../../src/newvalidator");
-
+//const { validateTelemetryPayload, ajv, clearValidatorCache } = require("../../src/newvalidator");
+import  { validateTelemetryPayload, ajv, clearValidatorCache } from "../../src/newvalidator"
 const schema = {
   type: "object",
   properties: {
@@ -10,6 +10,10 @@ const schema = {
 };
 
 describe("Validator", () => {
+  beforeEach(() => {
+    clearValidatorCache(); 
+    jest.clearAllMocks();
+  });
   it("should validate correct payload", () => {
     const msg = { schemaId: "modelF", value: 10 };
 
@@ -38,12 +42,17 @@ describe("Validator", () => {
 
   it("should use cache on repeated calls", () => {
     const msg = { schemaId: "modelF", value: 10 };
+    const compileSpy = jest.spyOn(ajv, 'compile');
+  
 
     const first = validateTelemetryPayload("modelF", schema, msg);
+    expect(compileSpy).toHaveBeenCalledTimes(1);
     const second = validateTelemetryPayload("modelF", schema, msg);
+    expect(compileSpy).toHaveBeenCalledTimes(1);
 
     expect(first.valid).toBe(true);
     expect(second.valid).toBe(true);
+    compileSpy.mockRestore();
   });
 
   it("should reject invalid payload with specific error", () => {
@@ -71,16 +80,38 @@ describe("Validator", () => {
     validateTelemetryPayload(key, s, m);
   }
 
-  expect(true).toBe(true); 
+  const result = validateTelemetryPayload("model-0", {
+      type: "object",
+      properties: { schemaId: { const: "model-0" } },
+      required: ["schemaId"]
+    }, { schemaId: "model-0" });
+
+
+  //expect(true).toBe(true); 
+  expect(result.valid).toBe(true);
   });
   
   it("should reject payloads missing required fields", () => {
-  const msg = { schemaId: "modelF" };
-  const result = validateTelemetryPayload("modelF", schema, msg);
-  
-  expect(result.valid).toBe(false);
-  expect(result.errors[0]).toMatch(/must have required property 'value'/);
-});
+    const msg = { schemaId: "modelF" };
+    const result = validateTelemetryPayload("modelF", schema, msg);
+    
+    expect(result.valid).toBe(false);
+    expect(result.errors[0]).toMatch(/must have required property 'value'/);
+  });
+
+  it("should reject payloads with missing schemaId", () => {
+      const msg = { value: 10 }; // fali schemaId
+      const result = validateTelemetryPayload("modelF", schema, msg);
+      expect(result.valid).toBe(false);
+      expect(result.errors[0]).toMatch(/Schema ID mismatch/);
+    });
+
+    it("should handle null message safely", () => {
+    const result = validateTelemetryPayload("modelF", schema, null);
+
+    expect(result.valid).toBe(false);
+  });
+
 
 
 });

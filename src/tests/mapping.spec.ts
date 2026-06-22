@@ -20,6 +20,10 @@ describe("Mapping Normalizer", () => {
 
     expect(result.data.pressure).toBe(4.5);
     expect(result.data.flow).toBe(20);
+    expect(result.deviceId).toBe("device1");
+    expect(result.raw).toEqual(message);
+    expect(result.timestamp).toBeDefined();
+
   });
 
   it("should skip missing fields", () => {
@@ -36,12 +40,56 @@ describe("Mapping Normalizer", () => {
 
     expect(result).toBeNull();
   });
+
   it("should handle deep missing paths gracefully", () => {
-  const message = { performance: null }; // Ili prazan objekat
+  const message = { performance: null }; 
 
   const result = normalizeWithMapping(message, "device1", mapping);
 
   expect(result.data.pressure).toBeUndefined();
   expect(result.data.flow).toBeUndefined();
  });
+
+ it("should include falsy values (0 and false) as valid data", () => {
+    const mapping = {
+      fields: {
+        val1: { path: "a.b" },
+        val2: { path: "a.c" }
+      }
+    };
+    const message = { a: { b: 0, c: false } };
+
+    const result = normalizeWithMapping(message, "device1", mapping);
+
+    expect(result.data.val1).toBe(0);
+    expect(result.data.val2).toBe(false);
+  });
+
+  it("should handle null values in payload correctly", () => {
+    const mapping = { fields: { val: { path: "a.b" } } };
+    const message = { a: { b: null } };
+
+    const result = normalizeWithMapping(message, "device1", mapping);
+    expect(result.data).toHaveProperty("val");
+    expect(result.data.val).toBeNull();
+  });
+  
+  it("should handle empty mapping", () => {
+    const result = normalizeWithMapping({}, "device1", { fields: {} });
+
+    expect(result.data).toEqual({});
+  });
+
+  it("should ignore non-existing deep paths", () => {
+    const mapping = {
+      fields: {
+        test: { path: "x.y.z" }
+      }
+    };
+
+    const result = normalizeWithMapping({}, "device1", mapping);
+
+    expect(result.data.test).toBeUndefined();
+  });
+
 });

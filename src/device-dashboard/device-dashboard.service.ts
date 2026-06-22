@@ -63,21 +63,21 @@ export class DeviceDashboardService {
     private readonly options: DeviceDashboardModuleOptions,
   ) {}
   private readonly logger = new PluginLogger(DeviceDashboardService.name);
-  private deviceCache = new Map<string, { device: any; expiresAt: number }>();
+ // private deviceCache = new Map<string, { device: any; expiresAt: number }>();
   private readonly DEVICE_TTL = 60 * 1000;
   private readonly CACHE_TTL = 60;
 
   async processTelemetry(message: unknown,context: TelemetryContext): Promise<{ approved: boolean; reason?: string }> {
    
     const deviceId = context.deviceId;
-    if (this.deviceCache.size >= 1000) {
+   /* if (this.deviceCache.size >= 1000) {
     const firstKey = this.deviceCache.keys().next().value;
   
     if (firstKey !== undefined) {
       this.deviceCache.delete(firstKey);
       this.logger.debug(`[CACHE] Evicted oldest entry from deviceCache: ${firstKey}`);
     }
-  }
+  }*/
     this.logger.debug(`[START] Received telemetry for device : ${deviceId || "UNKNOWN"}`);
 
     if (!deviceId) {
@@ -89,7 +89,7 @@ export class DeviceDashboardService {
     }
     const now=Date.now();
 
-    let cached = this.deviceCache.get(deviceId);
+    //let cached = this.deviceCache.get(deviceId);
     let device;
     const redisClient = this.options.redis;
 
