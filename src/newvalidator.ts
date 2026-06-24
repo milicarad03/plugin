@@ -54,7 +54,7 @@ export function validateTelemetryPayload(
   errors: string[];
 } {
   try {
-    if (message.schemaId !== cacheKey) {  //DODATO
+    if (message.schemaId !== cacheKey) {  
       return { 
         valid: false, 
         errors: [`Schema ID mismatch: expected ${cacheKey}, got ${message.schemaId}`] 

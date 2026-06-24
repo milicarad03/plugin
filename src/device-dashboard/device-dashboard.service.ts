@@ -68,7 +68,10 @@ export class DeviceDashboardService {
   private readonly CACHE_TTL = 60;
 
   async processTelemetry(message: unknown,context: TelemetryContext): Promise<{ approved: boolean; reason?: string }> {
-   
+    if (typeof message !== 'object' || message === null || Array.isArray(message)) {
+      this.logger.warn(`[DENIED] Malformed payload received for device ${context.deviceId}`);
+      return { approved: false, reason: "INVALID_PAYLOAD_FORMAT" };
+    }
     const deviceId = context.deviceId;
    /* if (this.deviceCache.size >= 1000) {
     const firstKey = this.deviceCache.keys().next().value;

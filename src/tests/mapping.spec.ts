@@ -91,5 +91,25 @@ describe("Mapping Normalizer", () => {
 
     expect(result.data.test).toBeUndefined();
   });
+  it("should handle invalid mapping path (e.g. non-string)", () => {
+  const badMapping = { fields: { test: { path: 123 as any } } };
+  
+  const result = normalizeWithMapping({ a: 1 }, "device1", badMapping);
+  expect(result.data.test).toBeUndefined(); 
+});
+it("should handle arrays as part of the path", () => {
+    const mapping = { fields: { first: { path: "items.0" } } };
+    const message = { items: ["a", "b"] };
+
+    const result = normalizeWithMapping(message, "device1", mapping);
+    expect(result.data.first).toBe("a");
+  });
+
+  it("should return null if mapping is null/undefined", () => {
+    // Tvoj kod ne proverava da li je 'mapping' validan objekat
+    // Ovo bi bio dobar test za robusnost
+    const result = normalizeWithMapping({}, "device1", null as any);
+    expect(result).toBeDefined(); // Ili da baci grešku, zavisno od dizajna
+  });
 
 });

@@ -45,6 +45,13 @@ describe('DeviceDashboardService', () => {
     service = new DeviceDashboardService(mockOptions);
     jest.clearAllMocks();
   });
+  afterEach(async () => {
+    if (mockRedis) {
+      await mockRedis.disconnect();
+    }
+  
+    jest.clearAllMocks();
+  });
 
   it('should use Redis cache if data exists (Cache Hit)', async () => {
     const device = mockDevice();
@@ -188,4 +195,58 @@ describe('DeviceDashboardService', () => {
   
     expect(result.approved).toBe(true);
   });
+  it('should default status to UNKNOWN if status field is missing', async () => {
+      const statusPayload = { timestamp: '2026-06-19T10:00:00Z' }; 
+      await service.processStatus(statusPayload, { deviceId: 'dev-123' });
+
+      expect(mockOptions.onStatusChange).toHaveBeenCalledWith('dev-123', 'UNKNOWN');
+  });
+  it('should log error if onStatusChange hook fails', async () => {
+      mockOptions.onStatusChange.mockRejectedValue(new Error('DB failure'));
+      const spy = jest.spyOn(service['logger'], 'error');
+      
+      await service.processStatus({ status: 'online' }, { deviceId: 'dev-123' });
+      
+      expect(spy).toHaveBeenCalledWith(expect.stringContaining('Error executing status hook: DB failure'));
+  });
+  it('should handle malformed non-object telemetry payload', async () => {
+      mockOptions.findDeviceById.mockResolvedValue(mockDevice());
+      
+      const result = await service.processTelemetry(12345, { deviceId: 'dev-123' });
+      
+      expect(result.approved).toBe(false);
+      expect(result.reason).toBe('INVALID_PAYLOAD_FORMAT');
+  });
+  it('should function correctly when Redis is not provided', async () => {
+      const serviceNoRedis = new DeviceDashboardService({ ...mockOptions, redis: undefined });
+      mockOptions.findDeviceById.mockResolvedValue(mockDevice());
+      mockValidator.mockReturnValue({ valid: true });
+      mockMapper.mockReturnValue({ data: {} });
+
+      const result = await serviceNoRedis.processTelemetry({ val: 1 }, { deviceId: 'dev-123' });
+      expect(result.approved).toBe(true);
+  });
+  it('should fallback to DB if Redis cache JSON is invalid', async () => {
+    await mockRedis.set('cache:device:dev-1', 'INVALID_JSON');
+
+    mockOptions.findDeviceById.mockResolvedValue(mockDevice());
+    mockValidator.mockReturnValue({ valid: true });
+    mockMapper.mockReturnValue({ deviceId: 'dev-1', data: {}, timestamp: '', raw: {} });
+
+    const result = await service.processTelemetry({}, { deviceId: 'dev-1' });
+
+    expect(result.approved).toBe(true);
+  });
+  it('should throw if onTelemetry fails', async () => {
+    mockOptions.findDeviceById.mockResolvedValue(mockDevice());
+    mockValidator.mockReturnValue({ valid: true });
+    mockMapper.mockReturnValue({ deviceId: 'dev-1', data: {}, timestamp: '', raw: {} });
+
+    mockOptions.onTelemetry.mockRejectedValue(new Error('fail'));
+
+    await expect(
+      service.processTelemetry({}, { deviceId: 'dev-1' })
+    ).rejects.toThrow();
+  });
+
 });
