@@ -7,14 +7,21 @@ class PluginLogger extends Logger {
     }
   }
 }
-const logger = new PluginLogger("MappingNormalizer");
+export const logger = new PluginLogger("MappingNormalizer");
 export type MappingDefinition = {
   fields: Record<string,{path: string;}>;
 };
 
 
 function getValueByPath(obj: any, path: string) {
+  ///dodato
+  if (typeof path !== 'string') {
+    return undefined;
+  }
   return path.split(".").reduce((acc, key) => {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+      return undefined;
+    }
     if (acc === undefined || acc === null) {
       return undefined;
     }
@@ -30,6 +37,11 @@ export function normalizeWithMapping(
 ) {
   if (!message || typeof message !== "object") {
     logger.warn(`[MAPPER] Normalization aborted for device ${deviceId}: Message is not a valid object.`);
+    return null;
+  }
+  ///dodato
+  if (!mapping || !mapping.fields) {
+    logger.warn(`[MAPPER] Normalization aborted for device ${deviceId}: Invalid mapping definition.`);
     return null;
   }
 

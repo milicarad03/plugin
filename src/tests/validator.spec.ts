@@ -189,4 +189,61 @@ describe("Validator", () => {
     expect(result.valid).toBe(false);
     expect(result.errors[0]).toMatch(/value must be number/);
   });
+
+  it("should reject schema without schemaId definition", () => {
+    const badSchema = {
+      type: "object",
+      properties: {
+        value: { type: "number" }
+      },
+      required: ["value"]
+    };
+
+    const msg = { value: 10 };
+
+    const result = validateTelemetryPayload("modelF", badSchema, msg);
+
+    expect(result.valid).toBe(false);
+  });
+  it("should reject nested type mismatch", () => {
+    const nestedSchema = {
+      type: "object",
+      properties: {
+        schemaId: { const: "modelF" },
+        meta: {
+          type: "object",
+          properties: {
+            temp: { type: "number" }
+          }
+        }
+      }
+    };
+
+    const msg = {
+      schemaId: "modelF",
+      meta: { temp: "wrong" }
+    };
+
+    const result = validateTelemetryPayload("modelF", nestedSchema, msg);
+
+    expect(result.valid).toBe(false);
+  });
+  it("should re-compile schema after cache clear", () => {
+      const compileSpy = jest.spyOn(ajv, 'compile');
+      const msg = { schemaId: "modelF", value: 10 };
+
+    
+      validateTelemetryPayload("modelF", schema, msg);
+      expect(compileSpy).toHaveBeenCalledTimes(1);
+
+    
+      clearValidatorCache();
+
+    
+      validateTelemetryPayload("modelF", schema, msg);
+      expect(compileSpy).toHaveBeenCalledTimes(2);
+
+      compileSpy.mockRestore();
+  });
+
 });
