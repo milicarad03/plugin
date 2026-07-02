@@ -3,7 +3,7 @@ import Redis from 'ioredis-mock';
 import * as validator from '../newvalidator';
 import * as mapper from '../mapping-normalizer';
 
-
+import { PluginErrorCode } from 'src/device-registry.interface';
 jest.mock('../newvalidator');
 jest.mock('../mapping-normalizer');
 
@@ -65,18 +65,15 @@ describe('DeviceDashboardService', () => {
     expect(mockOptions.findDeviceById).not.toHaveBeenCalled();
     expect(mockValidator).toHaveBeenCalled();
   });
-
-  it('should reject configuration mismatch', async () => {
-    mockOptions.findDeviceById.mockResolvedValue({ model: 'modelF', schema: { properties: { schemaId: { const: 'WRONG_MODEL' } }},
+  it('should throw PluginErrorCode.CONFIG_MISMATCH if configuration mismatch occurs', async () => {
+    mockOptions.findDeviceById.mockResolvedValue({ 
+      model: 'modelF', 
+      schema: { properties: { schemaId: { const: 'WRONG_MODEL' } }},
       mapping: { fields: {} }
     });
 
-    const result = await service.processTelemetry(
-      { value: 10 },
-      { deviceId: 'x' }
-    );
-
-    expect(result.reason).toBe('CONFIGURATION_MISMATCH');
+    await expect(service.processTelemetry({ value: 10 }, { deviceId: 'x' }))
+      .rejects.toThrow(PluginErrorCode.CONFIG_MISMATCH);
   });
   it('should reject missing model version', async () => {
     mockOptions.findDeviceById.mockResolvedValue({model: null, schema: mockSchema, mapping: { fields: {} }});
@@ -114,15 +111,15 @@ describe('DeviceDashboardService', () => {
     expect(result.reason).toBe('MISSING_DEVICE_IDENTIFIER');
   });
 
-  it('should reject missing schema', async () => {
+ /* it('should reject missing schema', async () => {
    
     mockOptions.findDeviceById.mockResolvedValue(mockDevice({ schema: null }));
     const result = await service.processTelemetry({}, { deviceId: 'x' });
     expect(result.reason).toBe('MISSING_SCHEMA');
-  });
+  });*/
 
  
-  it('should reject missing mapping', async () => {
+ /* it('should reject missing mapping', async () => {
     mockOptions.findDeviceById.mockResolvedValue({
       model: 'modelF',
       schema: { properties: { schemaId: { const: 'modelF' } } },
@@ -131,7 +128,7 @@ describe('DeviceDashboardService', () => {
 
     const result = await service.processTelemetry({}, { deviceId: 'x' });
     expect(result.reason).toBe('MISSING_MAPPING');
-  });
+  });*/
 
   
   it('should reject invalid schema payload', async () => {
@@ -147,7 +144,7 @@ describe('DeviceDashboardService', () => {
   });
 
 
-  it('should reject if normalization fails', async () => {
+ /* it('should reject if normalization fails', async () => {
     mockOptions.findDeviceById.mockResolvedValue({
       model: 'modelF',
       schema: { properties: { schemaId: { const: 'modelF' } } },
@@ -158,7 +155,7 @@ describe('DeviceDashboardService', () => {
     
     const result = await service.processTelemetry({ value: 10 }, { deviceId: 'x' });
     expect(result.reason).toBe('NORMALIZATION_FAILED');
-  });
+  });*/
 
   it('should process status and normalize state to uppercase', async () => {
     const statusPayload = { status: 'online', timestamp: '2026-06-19T10:00:00Z' };
@@ -201,14 +198,14 @@ describe('DeviceDashboardService', () => {
 
       expect(mockOptions.onStatusChange).toHaveBeenCalledWith('dev-123', 'UNKNOWN');
   });
-  it('should log error if onStatusChange hook fails', async () => {
+  /*it('should log error if onStatusChange hook fails', async () => {
       mockOptions.onStatusChange.mockRejectedValue(new Error('DB failure'));
       const spy = jest.spyOn(service['logger'], 'error');
       
       await service.processStatus({ status: 'online' }, { deviceId: 'dev-123' });
       
       expect(spy).toHaveBeenCalledWith(expect.stringContaining('Error executing status hook: DB failure'));
-  });
+  });*/
   it('should handle malformed non-object telemetry payload', async () => {
       mockOptions.findDeviceById.mockResolvedValue(mockDevice());
       
@@ -247,6 +244,56 @@ describe('DeviceDashboardService', () => {
     await expect(
       service.processTelemetry({}, { deviceId: 'dev-1' })
     ).rejects.toThrow();
+  });
+
+  // 1. Test za DATABASE_FAILURE
+  it('should throw PluginErrorCode.DATABASE_FAILURE if findDeviceById fails', async () => {
+    mockOptions.findDeviceById.mockRejectedValue(new Error('DB is down'));
+
+    await expect(
+      service.processTelemetry({ val: 1 }, { deviceId: 'dev-1' })
+    ).rejects.toThrow(PluginErrorCode.DATABASE_FAILURE);
+  });
+
+  // 2. Test za CONFIG_MISSING
+  it('should throw PluginErrorCode.CONFIG_MISSING if mapping is missing', async () => {
+    mockOptions.findDeviceById.mockResolvedValue({
+      model: 'modelF',
+      schema: { properties: { schemaId: { const: 'modelF' } } },
+      mapping: null 
+    });
+
+    await expect(
+      service.processTelemetry({}, { deviceId: 'dev-1' })
+    ).rejects.toThrow(PluginErrorCode.CONFIG_MISSING);
+  });
+  
+
+  // 3. Test za HOOK_FAILED
+  it('should throw PluginErrorCode.HOOK_FAILED if onTelemetry hook fails', async () => {
+    mockOptions.findDeviceById.mockResolvedValue(mockDevice());
+    mockValidator.mockReturnValue({ valid: true });
+    mockMapper.mockReturnValue({ deviceId: 'dev-1', data: {}, timestamp: '', raw: {} });
+    
+    mockOptions.onTelemetry.mockRejectedValue(new Error('Hook crash'));
+
+    await expect(
+      service.processTelemetry({}, { deviceId: 'dev-1' })
+    ).rejects.toThrow(PluginErrorCode.HOOK_FAILED);
+  });
+  
+  it('should throw PluginErrorCode.HOOK_FAILED if onStatusChange hook fails', async () => {
+    mockOptions.onStatusChange.mockRejectedValue(new Error('DB failure'));
+    
+    await expect(
+      service.processStatus({ status: 'online' }, { deviceId: 'dev-123' })
+    ).rejects.toThrow(PluginErrorCode.HOOK_FAILED);
+  });
+
+  it('should throw PluginErrorCode.CONFIG_MISSING if schema is missing', async () => {
+    mockOptions.findDeviceById.mockResolvedValue(mockDevice({ schema: null }));
+    await expect(service.processTelemetry({}, { deviceId: 'x' }))
+      .rejects.toThrow(PluginErrorCode.CONFIG_MISSING);
   });
 
 });

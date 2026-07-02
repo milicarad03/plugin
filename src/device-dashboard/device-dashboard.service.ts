@@ -3,7 +3,7 @@
 import fs from "fs";
 import path from "path";
 
-import { Inject, Injectable, Logger } from "@nestjs/common";
+import { Inject, Injectable, Logger, NotFoundException, ForbiddenException} from "@nestjs/common";
 import {
   DEVICE_DASHBOARD_OPTIONS,
   type DeviceDashboardModuleOptions,
@@ -15,6 +15,7 @@ import { normalizeUnknownDeviceModel } from "src/telemetry-normalizer";
 import { LazyModuleLoader } from "@nestjs/core";
 import { normalizeWithMapping } from "src/mapping-normalizer";
 import { MappingDefinition } from "src/mapping-normalizer";
+import { PluginErrorCode } from "../device-registry.interface";
 
 
 function loadMapping(deviceId: string) {
@@ -68,6 +69,7 @@ export class DeviceDashboardService {
   private readonly CACHE_TTL = 60;
 
   async processTelemetry(message: unknown,context: TelemetryContext): Promise<{ approved: boolean; reason?: string }> {
+
     if (typeof message !== 'object' || message === null || Array.isArray(message)) {
       this.logger.warn(`[DENIED] Malformed payload received for device ${context.deviceId}`);
       return { approved: false, reason: "INVALID_PAYLOAD_FORMAT" };
@@ -85,10 +87,7 @@ export class DeviceDashboardService {
 
     if (!deviceId) {
       this.logger.warn("[DENIED] Missing deviceId in message context.");
-      return {
-        approved: false,
-        reason: "MISSING_DEVICE_IDENTIFIER",
-      };
+      return { approved: false, reason: "MISSING_DEVICE_IDENTIFIER"};
     }
     const now=Date.now();
 
@@ -107,9 +106,16 @@ export class DeviceDashboardService {
         this.logger.error(`[REDIS CACHE] Error reading from Redis: ${err.message}`);
       }
     }
+
     if(!device){
       this.logger.debug(`[REDIS CACHE] MISS -> Fetching device ${deviceId} from database.`);
-      device = await this.options.findDeviceById(deviceId);
+    //  device = await this.options.findDeviceById(deviceId);
+        try {
+          device = await this.options.findDeviceById(deviceId);
+        } catch (err: any) {
+          this.logger.error(`[DATABASE] Failed loading device ${deviceId}: ${err.message}`);
+          throw new Error(PluginErrorCode.DATABASE_FAILURE);
+        }
   
       if (device && redisClient) {
           try {
@@ -137,6 +143,7 @@ export class DeviceDashboardService {
         reason: "MISSING_MODEL_VERSION",
       };
     }
+    
 
     const map=device.mapping;
     const mapping = map as MappingDefinition;
@@ -145,18 +152,16 @@ export class DeviceDashboardService {
 
     if (!map) {
       this.logger.warn(`[DENIED] Missing mapping definitions for version: ${device.model}`);
-      return {
+      /*return {
         approved: false,
         reason: "MISSING_MAPPING",
-      };
+      };*/
+     throw new Error(PluginErrorCode.CONFIG_MISSING);
     }
 
     if (!sch) {
       this.logger.warn(`[DENIED] Missing JSON schema for version: ${device.model}`);
-      return {
-        approved: false,
-        reason: "MISSING_SCHEMA",
-      };
+      throw new Error(PluginErrorCode.CONFIG_MISSING);
     }
 
     if (sch.properties?.schemaId?.const !== device.model) {
@@ -164,10 +169,7 @@ export class DeviceDashboardService {
         `[CONFIG MISMATCH] Device ${deviceId} is assigned to model '${device.model}', ` +
         `but its schema expects '${sch.properties?.schemaId?.const}'.`
       );
-      return { 
-        approved: false, 
-        reason: "CONFIGURATION_MISMATCH" 
-      };
+     throw new Error(PluginErrorCode.CONFIG_MISMATCH);
     }
 
     this.logger.debug(`[VALIDATION] Running AJV structure check for model version: ${device.model}`);
@@ -177,7 +179,14 @@ export class DeviceDashboardService {
       ...(message as Record<string, any>) 
     };
         
-    const validation = validateTelemetryPayload(device.model,sch,messageWithId);
+    //const validation = validateTelemetryPayload(device.model,sch,messageWithId);
+    let validation;
+    try {
+      validation = validateTelemetryPayload(device.model, sch, messageWithId);
+    } catch (err: any) {
+      this.logger.error(`[VALIDATION] Schema compilation failed for model ${device.model}: ${err.message}`);
+      throw new Error(PluginErrorCode.SCHEMA_COMPILE_ERROR);
+    }
 
     if (!validation.valid) {
       this.logger.warn(`[DENIED] Payload for device ${deviceId} failed JSON schema validation.`);
@@ -190,25 +199,45 @@ export class DeviceDashboardService {
     this.logger.log(`[VALIDATION] Success! Payload structure is valid.`);
     this.logger.debug(`[NORMALIZATION] Transforming device data using defined mapping rules.`);
 
-    const telemetry=normalizeWithMapping(message,deviceId,mapping);
-
-
-    if (!telemetry) {
-      this.logger.warn(`[DENIED] Data normalization failed for device: ${deviceId}`);
-      return {
-        approved: false,
-        reason: "NORMALIZATION_FAILED",
-      };
+    //const telemetry=normalizeWithMapping(message,deviceId,mapping);
+   // let telemetry;
+   // const telemetry = normalizeWithMapping(message, deviceId, device.mapping);
+   // if (!telemetry) throw new Error(PluginErrorCode.NORMALIZATION_FAILED);
+    let telemetry;
+    try {
+      telemetry = normalizeWithMapping(message, deviceId, device.mapping);
+    } catch (err: any) {
+      this.logger.error(`[NORMALIZATION] Mapping normalization threw for device ${deviceId}: ${err.message}`);
+      throw new Error(PluginErrorCode.NORMALIZATION_FAILED);
     }
+    if (!telemetry) throw new Error(PluginErrorCode.NORMALIZATION_FAILED);
+
+
+   /* if (!telemetry) {
+      this.logger.warn(`[DENIED] Data normalization failed for device: ${deviceId}`);
+      return {approved: false,reason: "NORMALIZATION_FAILED"};
+    }*/
     this.logger.debug(`[NORMALIZATION] Transformation result: ${JSON.stringify(telemetry.data)}`);
 
     this.logger.debug(`[SUCCESS] Forwarding normalized data to host application via onTelemetry hook...`);
 
-    await this.options.onTelemetry?.(telemetry);
+   // await this.options.onTelemetry?.(telemetry);
+   try {
+      await this.options.onTelemetry?.(telemetry);
+    } catch (err: any) {
+      this.logger.error(`[HOOK] onTelemetry failed for ${deviceId}: ${err.message}`);
+      if (err instanceof NotFoundException || err instanceof ForbiddenException) {
+        throw err;
+      }
+      if (err.message === 'INVALID_TIMESTAMP') {
+        throw new Error(PluginErrorCode.INVALID_TIMESTAMP);
+      }
+      throw new Error(PluginErrorCode.HOOK_FAILED);
 
-    return {
-      approved: true,
-    };
+    
+    }
+
+    return { approved: true };
   }
 
   async processStatus(statusPayload: unknown, context: TelemetryContext): Promise<void> {
@@ -243,6 +272,12 @@ export class DeviceDashboardService {
         this.logger.debug(`[STATUS] Status hook successfully executed for device: ${deviceId}`);
       } catch (err: any) {
         this.logger.error(`[STATUS] Error executing status hook: ${err.message}`);
+
+        if (err instanceof NotFoundException || err instanceof ForbiddenException) {
+          throw err;
+        }
+        throw new Error(PluginErrorCode.HOOK_FAILED);
+
       }
     }
   }

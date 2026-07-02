@@ -5,3 +5,4 @@ export type { DeviceTelemetry } from "./MqttDevicePlugin";
 export {'DEVICE_DASHBOARD_OPTIONS'} from "./device-registry.interface"
 export type {DeviceRegistry, RegisteredDevice} from "./device-registry.interface"
 export { DeviceCoreService } from './device.core.service';
+export { PluginErrorCode } from './device-registry.interface';

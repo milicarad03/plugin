@@ -42,7 +42,8 @@ export function normalizeWithMapping(
   ///dodato
   if (!mapping || !mapping.fields) {
     logger.warn(`[MAPPER] Normalization aborted for device ${deviceId}: Invalid mapping definition.`);
-    return null;
+    throw new Error(`[MAPPER] Invalid mapping definition for device ${deviceId}`);
+   // return null;
   }
 
   const data: Record<string, unknown> = {};
