@@ -14,6 +14,7 @@ export type RegisteredDevice = {
 
   schema?: any;   
   mapping?: any;
+  status?:any
 
 };
 export type DeviceTelemetry = {
@@ -29,6 +30,7 @@ export type DeviceDashboardModuleOptions = {
   onTelemetry?:(telemetry:DeviceTelemetry)=> Promise <void> | void;
   redis? : any;
   onStatusChange?: (deviceId: string, status: string) => Promise<void>;
+  sendCommand: (deviceId: string, command: string, payload?: any) => Promise<void>;
 };
 export interface DeviceRegistry {
     findByDeviceId(deviceId:string):Promise<RegisteredDevice| null> ;

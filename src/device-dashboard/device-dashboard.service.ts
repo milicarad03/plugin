@@ -281,6 +281,27 @@ export class DeviceDashboardService {
       }
     }
   }
+  async triggerDeviceTelemetry(deviceId: string, state: 'ACTIVE' | 'IDLE') {
+    const device = await this.options.findDeviceById(deviceId);
+    if (!device) {
+      this.logger.error(`[ORCHESTRATION] Device ${deviceId} not found.`);
+      throw new NotFoundException(`Device ${deviceId} not found`);
+    }
+    if (device.status === 'UNINITIALIZED') {
+      throw new ForbiddenException(`Device ${deviceId} is not initialized. Please complete setup.`);
+    }
+    if (device.status === 'OFFLINE') {
+      throw new ForbiddenException(`Device ${deviceId} is currently OFFLINE. Cannot perform action.`);
+    }
+    this.logger.log(`[CONTROL] Sending state change to ${state} for device ${deviceId}`);
+  if (state === 'ACTIVE') {
+    await this.options.sendCommand(deviceId, 'SET_MODE', { value: 'RUNNING' });
+    await new Promise(resolve => setTimeout(resolve, 500)); 
+    await this.options.sendCommand(deviceId, 'SET_STATE', { state: 'ACTIVE' });
+  } else {
+    await this.options.sendCommand(deviceId, 'SET_STATE', { state: 'IDLE' });
+  }
+  }
 
   async checkDevice(deviceId: string) {
     const device = await this.options.findDeviceById(deviceId);
