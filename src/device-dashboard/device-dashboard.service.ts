@@ -3,7 +3,7 @@
 import fs from "fs";
 import path from "path";
 
-import { Inject, Injectable, Logger, NotFoundException, ForbiddenException} from "@nestjs/common";
+import { Inject, Injectable, Logger, NotFoundException, ForbiddenException, HttpException} from "@nestjs/common";
 import {
   DEVICE_DASHBOARD_OPTIONS,
   type DeviceDashboardModuleOptions,
@@ -67,6 +67,7 @@ export class DeviceDashboardService {
  // private deviceCache = new Map<string, { device: any; expiresAt: number }>();
   private readonly DEVICE_TTL = 60 * 1000;
   private readonly CACHE_TTL = 60;
+  
 
   async processTelemetry(message: unknown,context: TelemetryContext): Promise<{ approved: boolean; reason?: string }> {
 
@@ -281,25 +282,56 @@ export class DeviceDashboardService {
       }
     }
   }
+
+  private commandLock = new Map<string, boolean>();
   async triggerDeviceTelemetry(deviceId: string, state: 'ACTIVE' | 'IDLE') {
+
+  this.logger.warn(
+      `[TRIGGER] device=${deviceId} requestedState=${state}`
+    );
+
+    if (this.commandLock.get(deviceId)) {
+      this.logger.warn(`[LOCKED] Command for ${deviceId} ongoing. Ignore.`);
+      return;
+    }
+  this.commandLock.set(deviceId, true);
+
+  try{
+
     const device = await this.options.findDeviceById(deviceId);
     if (!device) {
       this.logger.error(`[ORCHESTRATION] Device ${deviceId} not found.`);
-      throw new NotFoundException(`Device ${deviceId} not found`);
+      throw new Error('DEVICE_NOT_FOUND')
     }
+  
     if (device.status === 'UNINITIALIZED') {
-      throw new ForbiddenException(`Device ${deviceId} is not initialized. Please complete setup.`);
+       throw new Error('DEVICE_UNINITIALIZED');
     }
+    
     if (device.status === 'OFFLINE') {
-      throw new ForbiddenException(`Device ${deviceId} is currently OFFLINE. Cannot perform action.`);
+     throw new Error('DEVICE_OFFLINE');
     }
+    if (state === 'ACTIVE' && device.status === 'ACTIVE') return; 
+    if (state === 'IDLE' && device.status === 'IDLE') return;
+
     this.logger.log(`[CONTROL] Sending state change to ${state} for device ${deviceId}`);
-  if (state === 'ACTIVE') {
-    await this.options.sendCommand(deviceId, 'SET_MODE', { value: 'RUNNING' });
-    await new Promise(resolve => setTimeout(resolve, 500)); 
-    await this.options.sendCommand(deviceId, 'SET_STATE', { state: 'ACTIVE' });
-  } else {
-    await this.options.sendCommand(deviceId, 'SET_STATE', { state: 'IDLE' });
+    if (state === 'ACTIVE') {
+      await this.options.sendCommand(deviceId, 'SET_MODE', { value: 'RUNNING' });
+      await new Promise(resolve => setTimeout(resolve, 500)); 
+      await this.options.sendCommand(deviceId, 'SET_STATE', { state: 'ACTIVE' });
+    } else {
+      await this.options.sendCommand(deviceId, 'SET_STATE', { state: 'IDLE' });
+    }
+  }catch (err:any) {
+
+    this.logger.warn(
+      `Command failed for ${deviceId}: ${err.message}`
+    );
+
+    throw err;
+  } finally{
+    //this.commandLock.set(deviceId,false);
+    this.commandLock.delete(deviceId);
   }
   }
 
