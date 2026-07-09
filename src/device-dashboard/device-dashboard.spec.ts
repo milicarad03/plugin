@@ -111,25 +111,7 @@ describe('DeviceDashboardService', () => {
     expect(result.reason).toBe('MISSING_DEVICE_IDENTIFIER');
   });
 
- /* it('should reject missing schema', async () => {
-   
-    mockOptions.findDeviceById.mockResolvedValue(mockDevice({ schema: null }));
-    const result = await service.processTelemetry({}, { deviceId: 'x' });
-    expect(result.reason).toBe('MISSING_SCHEMA');
-  });*/
-
  
- /* it('should reject missing mapping', async () => {
-    mockOptions.findDeviceById.mockResolvedValue({
-      model: 'modelF',
-      schema: { properties: { schemaId: { const: 'modelF' } } },
-      mapping: null 
-    });
-
-    const result = await service.processTelemetry({}, { deviceId: 'x' });
-    expect(result.reason).toBe('MISSING_MAPPING');
-  });*/
-
   
   it('should reject invalid schema payload', async () => {
     mockOptions.findDeviceById.mockResolvedValue({
@@ -144,18 +126,6 @@ describe('DeviceDashboardService', () => {
   });
 
 
- /* it('should reject if normalization fails', async () => {
-    mockOptions.findDeviceById.mockResolvedValue({
-      model: 'modelF',
-      schema: { properties: { schemaId: { const: 'modelF' } } },
-      mapping: { fields: {} }
-    });
-    mockValidator.mockReturnValue({ valid: true, errors: [] });
-    mockMapper.mockReturnValue(null);
-    
-    const result = await service.processTelemetry({ value: 10 }, { deviceId: 'x' });
-    expect(result.reason).toBe('NORMALIZATION_FAILED');
-  });*/
 
   it('should process status and normalize state to uppercase', async () => {
     const statusPayload = { status: 'online', timestamp: '2026-06-19T10:00:00Z' };
@@ -198,14 +168,7 @@ describe('DeviceDashboardService', () => {
 
       expect(mockOptions.onStatusChange).toHaveBeenCalledWith('dev-123', 'UNKNOWN');
   });
-  /*it('should log error if onStatusChange hook fails', async () => {
-      mockOptions.onStatusChange.mockRejectedValue(new Error('DB failure'));
-      const spy = jest.spyOn(service['logger'], 'error');
-      
-      await service.processStatus({ status: 'online' }, { deviceId: 'dev-123' });
-      
-      expect(spy).toHaveBeenCalledWith(expect.stringContaining('Error executing status hook: DB failure'));
-  });*/
+
   it('should handle malformed non-object telemetry payload', async () => {
       mockOptions.findDeviceById.mockResolvedValue(mockDevice());
       

@@ -1,4 +1,3 @@
-// serverplugin/src/device-dashboard/device-dashboard.service.ts
 
 import fs from "fs";
 import path from "path";
@@ -10,7 +9,7 @@ import {
   type DeviceTelemetry,
 } from "../device-registry.interface";
 
-import { validateTelemetryPayload } from "src/newvalidator";
+import { validateTelemetryPayload, validateDeviceCommand } from "src/newvalidator";
 import { normalizeUnknownDeviceModel } from "src/telemetry-normalizer";
 import { LazyModuleLoader } from "@nestjs/core";
 import { normalizeWithMapping } from "src/mapping-normalizer";
@@ -286,53 +285,80 @@ export class DeviceDashboardService {
   private commandLock = new Map<string, boolean>();
   async triggerDeviceTelemetry(deviceId: string, state: 'ACTIVE' | 'IDLE') {
 
-  this.logger.warn(
-      `[TRIGGER] device=${deviceId} requestedState=${state}`
-    );
-
-    if (this.commandLock.get(deviceId)) {
-      this.logger.warn(`[LOCKED] Command for ${deviceId} ongoing. Ignore.`);
-      return;
-    }
-  this.commandLock.set(deviceId, true);
-
-  try{
-
-    const device = await this.options.findDeviceById(deviceId);
-    if (!device) {
-      this.logger.error(`[ORCHESTRATION] Device ${deviceId} not found.`);
-      throw new Error('DEVICE_NOT_FOUND')
-    }
-  
-    if (device.status === 'UNINITIALIZED') {
-       throw new Error('DEVICE_UNINITIALIZED');
-    }
-    
-    if (device.status === 'OFFLINE') {
-     throw new Error('DEVICE_OFFLINE');
-    }
-    if (state === 'ACTIVE' && device.status === 'ACTIVE') return; 
-    if (state === 'IDLE' && device.status === 'IDLE') return;
-
-    this.logger.log(`[CONTROL] Sending state change to ${state} for device ${deviceId}`);
-    if (state === 'ACTIVE') {
-      await this.options.sendCommand(deviceId, 'SET_MODE', { value: 'RUNNING' });
-      await new Promise(resolve => setTimeout(resolve, 500)); 
-      await this.options.sendCommand(deviceId, 'SET_STATE', { state: 'ACTIVE' });
-    } else {
-      await this.options.sendCommand(deviceId, 'SET_STATE', { state: 'IDLE' });
-    }
-  }catch (err:any) {
-
     this.logger.warn(
-      `Command failed for ${deviceId}: ${err.message}`
-    );
+        `[TRIGGER] device=${deviceId} requestedState=${state}`
+      );
 
-    throw err;
-  } finally{
-    //this.commandLock.set(deviceId,false);
-    this.commandLock.delete(deviceId);
+      if (this.commandLock.get(deviceId)) {
+        this.logger.warn(`[LOCKED] Command for ${deviceId} ongoing. Ignore.`);
+        return;
+      }
+    this.commandLock.set(deviceId, true);
+
+    try{
+
+      const device = await this.options.findDeviceById(deviceId);
+      if (!device) {
+        this.logger.error(`[ORCHESTRATION] Device ${deviceId} not found.`);
+        throw new Error('DEVICE_NOT_FOUND')
+      }
+    
+      if (device.status === 'UNINITIALIZED') {
+        throw new Error('DEVICE_UNINITIALIZED');
+      }
+      
+      if (device.status === 'OFFLINE') {
+      throw new Error('DEVICE_OFFLINE');
+      }
+      if (state === 'ACTIVE' && device.status === 'ACTIVE') return; 
+      if (state === 'IDLE' && device.status === 'IDLE') return;
+
+      this.logger.log(`[CONTROL] Sending state change to ${state} for device ${deviceId}`);
+      if (state === 'ACTIVE') {
+        await this.options.sendCommand(deviceId, 'SET_MODE', { value: 'RUNNING' });
+        await new Promise(resolve => setTimeout(resolve, 500)); 
+        await this.options.sendCommand(deviceId, 'SET_STATE', { state: 'ACTIVE' });
+      } else {
+        await this.options.sendCommand(deviceId, 'SET_STATE', { state: 'IDLE' });
+      }
+    }catch (err:any) {
+
+      this.logger.warn(
+        `Command failed for ${deviceId}: ${err.message}`
+      );
+
+      throw err;
+    } finally{
+     
+      this.commandLock.delete(deviceId);
+    }
   }
+  async setLedColor(deviceId: string, color: string) {
+  const device = await this.options.findDeviceById(deviceId);
+  
+
+  if (!device) {
+    throw new Error("DEVICE_NOT_FOUND");
+  }
+  if (device.status === 'OFFLINE') {
+    throw new Error('DEVICE_OFFLINE');
+  }
+
+  if (device.status === 'UNINITIALIZED') {
+    throw new Error('DEVICE_UNINITIALIZED');
+  }
+
+  const validation = validateDeviceCommand( device.schema , "SET_LED_COLOR",{color});
+
+    if (!validation.valid) {
+      throw new Error( validation.errors.join(", ") );
+    }
+
+    await this.options.sendCommand( deviceId, "SET_LED_COLOR", { color });
+
+    this.logger.log(
+      `[CONTROL] LED color changed for ${deviceId} -> ${color}`
+    );
   }
 
   async checkDevice(deviceId: string) {
