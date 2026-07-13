@@ -10,7 +10,7 @@ import {
 } from "../device-registry.interface";
 
 import { validateTelemetryPayload, validateDeviceCommand } from "src/newvalidator";
-import { normalizeUnknownDeviceModel } from "src/telemetry-normalizer";
+
 import { LazyModuleLoader } from "@nestjs/core";
 import { normalizeWithMapping } from "src/mapping-normalizer";
 import { MappingDefinition } from "src/mapping-normalizer";
@@ -63,7 +63,6 @@ export class DeviceDashboardService {
     private readonly options: DeviceDashboardModuleOptions,
   ) {}
   private readonly logger = new PluginLogger(DeviceDashboardService.name);
- // private deviceCache = new Map<string, { device: any; expiresAt: number }>();
   private readonly DEVICE_TTL = 60 * 1000;
   private readonly CACHE_TTL = 60;
   
@@ -75,14 +74,7 @@ export class DeviceDashboardService {
       return { approved: false, reason: "INVALID_PAYLOAD_FORMAT" };
     }
     const deviceId = context.deviceId;
-   /* if (this.deviceCache.size >= 1000) {
-    const firstKey = this.deviceCache.keys().next().value;
-  
-    if (firstKey !== undefined) {
-      this.deviceCache.delete(firstKey);
-      this.logger.debug(`[CACHE] Evicted oldest entry from deviceCache: ${firstKey}`);
-    }
-  }*/
+   
     this.logger.debug(`[START] Received telemetry for device : ${deviceId || "UNKNOWN"}`);
 
     if (!deviceId) {
@@ -90,8 +82,6 @@ export class DeviceDashboardService {
       return { approved: false, reason: "MISSING_DEVICE_IDENTIFIER"};
     }
     const now=Date.now();
-
-    //let cached = this.deviceCache.get(deviceId);
     let device;
     const redisClient = this.options.redis;
 
@@ -109,7 +99,6 @@ export class DeviceDashboardService {
 
     if(!device){
       this.logger.debug(`[REDIS CACHE] MISS -> Fetching device ${deviceId} from database.`);
-    //  device = await this.options.findDeviceById(deviceId);
         try {
           device = await this.options.findDeviceById(deviceId);
         } catch (err: any) {
@@ -152,11 +141,7 @@ export class DeviceDashboardService {
 
     if (!map) {
       this.logger.warn(`[DENIED] Missing mapping definitions for version: ${device.model}`);
-      /*return {
-        approved: false,
-        reason: "MISSING_MAPPING",
-      };*/
-     throw new Error(PluginErrorCode.CONFIG_MISSING);
+      throw new Error(PluginErrorCode.CONFIG_MISSING);
     }
 
     if (!sch) {
@@ -169,7 +154,7 @@ export class DeviceDashboardService {
         `[CONFIG MISMATCH] Device ${deviceId} is assigned to model '${device.model}', ` +
         `but its schema expects '${sch.properties?.schemaId?.const}'.`
       );
-     throw new Error(PluginErrorCode.CONFIG_MISMATCH);
+      throw new Error(PluginErrorCode.CONFIG_MISMATCH);
     }
 
     this.logger.debug(`[VALIDATION] Running AJV structure check for model version: ${device.model}`);
@@ -179,7 +164,7 @@ export class DeviceDashboardService {
       ...(message as Record<string, any>) 
     };
         
-    //const validation = validateTelemetryPayload(device.model,sch,messageWithId);
+   
     let validation;
     try {
       validation = validateTelemetryPayload(device.model, sch, messageWithId);
@@ -199,10 +184,6 @@ export class DeviceDashboardService {
     this.logger.log(`[VALIDATION] Success! Payload structure is valid.`);
     this.logger.debug(`[NORMALIZATION] Transforming device data using defined mapping rules.`);
 
-    //const telemetry=normalizeWithMapping(message,deviceId,mapping);
-   // let telemetry;
-   // const telemetry = normalizeWithMapping(message, deviceId, device.mapping);
-   // if (!telemetry) throw new Error(PluginErrorCode.NORMALIZATION_FAILED);
     let telemetry;
     try {
       telemetry = normalizeWithMapping(message, deviceId, device.mapping);
@@ -212,16 +193,10 @@ export class DeviceDashboardService {
     }
     if (!telemetry) throw new Error(PluginErrorCode.NORMALIZATION_FAILED);
 
-
-   /* if (!telemetry) {
-      this.logger.warn(`[DENIED] Data normalization failed for device: ${deviceId}`);
-      return {approved: false,reason: "NORMALIZATION_FAILED"};
-    }*/
     this.logger.debug(`[NORMALIZATION] Transformation result: ${JSON.stringify(telemetry.data)}`);
 
     this.logger.debug(`[SUCCESS] Forwarding normalized data to host application via onTelemetry hook...`);
 
-   // await this.options.onTelemetry?.(telemetry);
    try {
       await this.options.onTelemetry?.(telemetry);
     } catch (err: any) {
@@ -312,11 +287,14 @@ export class DeviceDashboardService {
       }
       if (state === 'ACTIVE' && device.status === 'ACTIVE') return; 
       if (state === 'IDLE' && device.status === 'IDLE') return;
+      const supportsSetMode = !!device.schema?.commands?.SET_MODE;
 
       this.logger.log(`[CONTROL] Sending state change to ${state} for device ${deviceId}`);
       if (state === 'ACTIVE') {
+        if(supportsSetMode){
         await this.options.sendCommand(deviceId, 'SET_MODE', { value: 'RUNNING' });
         await new Promise(resolve => setTimeout(resolve, 500)); 
+        }
         await this.options.sendCommand(deviceId, 'SET_STATE', { state: 'ACTIVE' });
       } else {
         await this.options.sendCommand(deviceId, 'SET_STATE', { state: 'IDLE' });
@@ -333,34 +311,42 @@ export class DeviceDashboardService {
       this.commandLock.delete(deviceId);
     }
   }
-  async setLedColor(deviceId: string, color: string) {
-  const device = await this.options.findDeviceById(deviceId);
-  
 
-  if (!device) {
-    throw new Error("DEVICE_NOT_FOUND");
-  }
-  if (device.status === 'OFFLINE') {
-    throw new Error('DEVICE_OFFLINE');
-  }
+ async executeCommand( deviceId: string, command: string, payload: any ) {
+    const device = await this.options.findDeviceById(deviceId);
 
-  if (device.status === 'UNINITIALIZED') {
-    throw new Error('DEVICE_UNINITIALIZED');
-  }
-
-  const validation = validateDeviceCommand( device.schema , "SET_LED_COLOR",{color});
-
-    if (!validation.valid) {
-      throw new Error( validation.errors.join(", ") );
+    if (!device) {
+      throw new Error("DEVICE_NOT_FOUND");
     }
 
-    await this.options.sendCommand( deviceId, "SET_LED_COLOR", { color });
+    if (device.status === "OFFLINE") {
+      throw new Error("DEVICE_OFFLINE");
+    }
 
-    this.logger.log(
-      `[CONTROL] LED color changed for ${deviceId} -> ${color}`
+    if (device.status === "UNINITIALIZED") {
+      throw new Error("DEVICE_UNINITIALIZED");
+    }
+  
+
+    const validation = validateDeviceCommand( device.schema, command, payload );
+
+    if (!validation.valid) {
+      throw new Error( validation.errors.join(", "));
+    }
+
+    if (command === "SET_STATE") {
+      return this.triggerDeviceTelemetry(
+        deviceId,
+        payload.state
+      );
+    }
+
+    await this.options.sendCommand(
+      deviceId,
+      command,
+      payload
     );
-  }
-
+}
   async checkDevice(deviceId: string) {
     const device = await this.options.findDeviceById(deviceId);
 

@@ -3,6 +3,7 @@ import { Logger } from "@nestjs/common";
 import { PluginErrorCode } from "./device-registry.interface";
 
 export const ajv = new Ajv2020({ allErrors: true });
+ajv.addKeyword("commands");
 class PluginLogger extends Logger {
   override debug(message: string) {
     if (process.env.LOG_LEVEL === 'debug') {
@@ -75,46 +76,30 @@ export function validateTelemetryPayload( cacheKey: string, schema: any, message
         }) ?? [],
     };
   } catch (err: any) {
-   // return {valid: false, errors: [err.message],};
 
-    logger.error(
-      `[VALIDATOR] Failed compiling schema ${cacheKey}: ${err.message}`
-    );
+    logger.error(`[VALIDATOR] Failed compiling schema ${cacheKey}: ${err.message}` );
 
     throw new Error(PluginErrorCode.CONFIG_MISSING);
 
   }
 }
-export function validateDeviceCommand(
-  schema: any,
-  command: string,
-  payload: any
-): {
-  valid: boolean;
-  errors: string[];
-} {
+export function validateDeviceCommand( schema: any, command: string, payload: any): { valid: boolean; errors: string[]; } {
 
-  const commandDefinition =
-    schema?.commands?.[command];
+  const commandDefinition = schema?.commands?.[command];
 
   if (!commandDefinition) {
     return {
       valid: false,
-      errors: [
-        `Command '${command}' is not supported by this device model`
-      ]
+      errors: [ `Command '${command}' is not supported by this device model` ]
     };
   }
 
-  const payloadSchema =
-    commandDefinition.payload;
+  const payloadSchema = commandDefinition.payload;
 
   if (!payloadSchema) {
     return {
       valid: false,
-      errors: [
-        `Command '${command}' has no payload schema`
-      ]
+      errors: [`Command '${command}' has no payload schema`]
     };
   }
 
@@ -132,10 +117,7 @@ export function validateDeviceCommand(
   return {
     valid: false,
     errors:
-      validate.errors?.map(
-        err =>
-          `${err.instancePath || "payload"} ${err.message}`
-      ) ?? []
+      validate.errors?.map( err =>`${err.instancePath || "payload"} ${err.message}` ) ?? []
   };
 }
 export function clearValidatorCache() {

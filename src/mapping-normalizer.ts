@@ -14,7 +14,6 @@ export type MappingDefinition = {
 
 
 function getValueByPath(obj: any, path: string) {
-  ///dodato
   if (typeof path !== 'string') {
     return undefined;
   }
@@ -39,11 +38,11 @@ export function normalizeWithMapping(
     logger.warn(`[MAPPER] Normalization aborted for device ${deviceId}: Message is not a valid object.`);
     return null;
   }
-  ///dodato
+
   if (!mapping || !mapping.fields) {
     logger.warn(`[MAPPER] Normalization aborted for device ${deviceId}: Invalid mapping definition.`);
     throw new Error(`[MAPPER] Invalid mapping definition for device ${deviceId}`);
-   // return null;
+ 
   }
 
   const data: Record<string, unknown> = {};
