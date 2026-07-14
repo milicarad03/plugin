@@ -20,6 +20,7 @@ async function bootstrap() {
 
   // 5. Start listening on the environment port or fallback to 3000
   const port = process.env.PORT ?? 3000;
+  app.enableShutdownHooks();
   await app.listen(port);
 }
 bootstrap();

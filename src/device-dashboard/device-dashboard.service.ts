@@ -2,7 +2,7 @@
 import fs from "fs";
 import path from "path";
 
-import { Inject, Injectable, Logger, NotFoundException, ForbiddenException, HttpException} from "@nestjs/common";
+import { Inject, Injectable, Logger, NotFoundException, ForbiddenException, HttpException, OnModuleDestroy} from "@nestjs/common";
 import {
   DEVICE_DASHBOARD_OPTIONS,
   type DeviceDashboardModuleOptions,
@@ -57,15 +57,53 @@ class PluginLogger extends Logger {
 
 
 @Injectable()
-export class DeviceDashboardService {
+export class DeviceDashboardService implements OnModuleDestroy {
   constructor(
     @Inject(DEVICE_DASHBOARD_OPTIONS)
     private readonly options: DeviceDashboardModuleOptions,
-  ) {}
+  ) {
+    this.startOfflineMonitor();
+  }
   private readonly logger = new PluginLogger(DeviceDashboardService.name);
   private readonly DEVICE_TTL = 60 * 1000;
   private readonly CACHE_TTL = 60;
-  
+  private readonly lastSeen = new Map<string, number>();
+  private offlineMonitorHandle: NodeJS.Timeout | null = null; // <-- dodato
+  private validateDevice(device: any) {
+
+    if (!device) {
+      throw new Error("DEVICE_NOT_FOUND");
+    }
+
+    if (device.status === "OFFLINE") {
+      throw new Error("DEVICE_OFFLINE");
+    }
+
+    if (device.status === "UNINITIALIZED") {
+      throw new Error("DEVICE_UNINITIALIZED");
+    }
+  }
+  private isCommandRedundant(latestData: any, command: string, payload: any): boolean {
+    if (!latestData) return false;
+
+    const stateMapping: Record<string, string> = {
+      'SET_LED_COLOR': 'ledColor', 
+      'SET_STATE': 'state',
+      'SET_OPERATING_PROFILE': 'operatingProfile'
+    };
+
+    const field = stateMapping[command];
+    if (!field) return false;
+
+    const currentValue = latestData[field];
+    const newValue = Object.values(payload)[0];
+
+    if (currentValue !== undefined && currentValue === newValue) {
+      this.logger.warn(`[REDUNDANT] command ${command} is redundant. Device is already in state:  ${newValue}`);
+      return true;
+    }
+    return false;
+  }
 
   async processTelemetry(message: unknown,context: TelemetryContext): Promise<{ approved: boolean; reason?: string }> {
 
@@ -182,6 +220,7 @@ export class DeviceDashboardService {
       };
     }
     this.logger.log(`[VALIDATION] Success! Payload structure is valid.`);
+    this.lastSeen.set(deviceId, Date.now());
     this.logger.debug(`[NORMALIZATION] Transforming device data using defined mapping rules.`);
 
     let telemetry;
@@ -231,6 +270,9 @@ export class DeviceDashboardService {
       return;
     }
 
+    this.lastSeen.set(deviceId, Date.now());
+
+
     const status = String(statusObject.status ?? "unknown");
     const timestamp =
       typeof statusObject.timestamp === "string"
@@ -278,13 +320,7 @@ export class DeviceDashboardService {
         throw new Error('DEVICE_NOT_FOUND')
       }
     
-      if (device.status === 'UNINITIALIZED') {
-        throw new Error('DEVICE_UNINITIALIZED');
-      }
-      
-      if (device.status === 'OFFLINE') {
-      throw new Error('DEVICE_OFFLINE');
-      }
+      this.validateDevice(device);
       if (state === 'ACTIVE' && device.status === 'ACTIVE') return; 
       if (state === 'IDLE' && device.status === 'IDLE') return;
       const supportsSetMode = !!device.schema?.commands?.SET_MODE;
@@ -315,18 +351,18 @@ export class DeviceDashboardService {
  async executeCommand( deviceId: string, command: string, payload: any ) {
     const device = await this.options.findDeviceById(deviceId);
 
+  
+    this.validateDevice(device);
     if (!device) {
       throw new Error("DEVICE_NOT_FOUND");
     }
-
-    if (device.status === "OFFLINE") {
-      throw new Error("DEVICE_OFFLINE");
+    if (!device.schema) {
+      throw new Error("DEVICE_SCHEMA_MISSING");
     }
-
-    if (device.status === "UNINITIALIZED") {
-      throw new Error("DEVICE_UNINITIALIZED");
-    }
-  
+    const latest = await this.options.getLatestTelemetry(deviceId);
+    if (this.isCommandRedundant(latest?.data, command, payload)) {
+    return; 
+  }
 
     const validation = validateDeviceCommand( device.schema, command, payload );
 
@@ -341,12 +377,97 @@ export class DeviceDashboardService {
       );
     }
 
-    await this.options.sendCommand(
-      deviceId,
-      command,
-      payload
-    );
+    await this.options.sendCommand( deviceId, command, payload);
 }
+private extractFields( schema: any, prefix = "", required: string[] = []): any[] {
+
+  const result: any[] = [];
+
+  if (!schema?.properties) {
+    return result;
+  }
+
+  for (const [key, value] of Object.entries<any>(schema.properties)) {
+
+    const path = prefix ? `${prefix}.${key}`: key;
+
+    if (value.type === "object" && value.properties) {
+
+      result.push(
+        ...this.extractFields(value, path, value.required ?? [])
+      );
+
+      continue;
+    }
+
+   result.push({
+    name: key,
+    path,
+    type: value.type,
+    required: required.includes(key),
+    enum: value.enum,
+    minimum: value.minimum,
+    maximum: value.maximum,
+    default: value.default,
+    description: value.description
+  });
+  }
+
+  return result;
+}
+async getCommandMetadata(deviceId: string) {
+
+  const device = await this.options.findDeviceById(deviceId);
+
+  if (!device) {
+    throw new Error("DEVICE_NOT_FOUND");
+  }
+
+  const commands = device.schema?.commands ?? {};
+
+  return Object.entries(commands).map(
+    ([commandName, commandDef]: any) => ({
+
+      command: commandName,
+
+      fields: this.extractFields(
+        commandDef.payload,
+        "",
+        commandDef.payload?.required ?? []
+      )
+    })
+  );
+}
+private startOfflineMonitor() {
+  this.offlineMonitorHandle = setInterval(async () => {
+    const now = Date.now();
+
+    for (const [deviceId, lastSeen] of this.lastSeen.entries()) {
+      if (now - lastSeen > this.DEVICE_TTL) {
+        this.logger.warn(`[OFFLINE DETECTOR] Device ${deviceId} marked OFFLINE`);
+
+        try {
+          await this.options.onStatusChange?.(deviceId, "OFFLINE");
+        } catch (err: any) {
+          this.logger.error(
+            `[OFFLINE DETECTOR] Failed updating ${deviceId}: ${err.message}`
+          );
+        }
+
+        this.lastSeen.delete(deviceId);
+      }
+    }
+  }, 30000);
+}
+ onModuleDestroy() {
+    if (this.offlineMonitorHandle) {
+      clearInterval(this.offlineMonitorHandle);
+      this.offlineMonitorHandle = null;
+    }
+  }
+
+
+
   async checkDevice(deviceId: string) {
     const device = await this.options.findDeviceById(deviceId);
 

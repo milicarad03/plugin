@@ -46,6 +46,7 @@ describe('DeviceDashboardService', () => {
     jest.clearAllMocks();
   });
   afterEach(async () => {
+    service.onModuleDestroy();
     if (mockRedis) {
       await mockRedis.disconnect();
     }
@@ -179,12 +180,16 @@ describe('DeviceDashboardService', () => {
   });
   it('should function correctly when Redis is not provided', async () => {
       const serviceNoRedis = new DeviceDashboardService({ ...mockOptions, redis: undefined });
-      mockOptions.findDeviceById.mockResolvedValue(mockDevice());
-      mockValidator.mockReturnValue({ valid: true });
-      mockMapper.mockReturnValue({ data: {} });
+      try {
+        mockOptions.findDeviceById.mockResolvedValue(mockDevice());
+        mockValidator.mockReturnValue({ valid: true });
+        mockMapper.mockReturnValue({ data: {} });
 
-      const result = await serviceNoRedis.processTelemetry({ val: 1 }, { deviceId: 'dev-123' });
-      expect(result.approved).toBe(true);
+        const result = await serviceNoRedis.processTelemetry({ val: 1 }, { deviceId: 'dev-123' });
+        expect(result.approved).toBe(true);
+      } finally {
+        serviceNoRedis.onModuleDestroy();
+      }
   });
   it('should fallback to DB if Redis cache JSON is invalid', async () => {
     await mockRedis.set('cache:device:dev-1', 'INVALID_JSON');
