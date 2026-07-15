@@ -4,6 +4,7 @@ import * as validator from '../newvalidator';
 import * as mapper from '../mapping-normalizer';
 
 import { PluginErrorCode } from 'src/device-registry.interface';
+import { ForbiddenException , NotFoundException} from '@nestjs/common';
 jest.mock('../newvalidator');
 jest.mock('../mapping-normalizer');
 
@@ -41,17 +42,23 @@ describe('DeviceDashboardService', () => {
       findDeviceById: jest.fn(),
       onTelemetry: jest.fn(),
       onStatusChange: jest.fn(),
+      sendCommand: jest.fn(),
+      getLatestTelemetry: jest.fn(),
     };
     service = new DeviceDashboardService(mockOptions);
     jest.clearAllMocks();
   });
   afterEach(async () => {
-    service.onModuleDestroy();
+      
+   // service.onModuleDestroy();
+
     if (mockRedis) {
       await mockRedis.disconnect();
     }
-  
+
     jest.clearAllMocks();
+    jest.restoreAllMocks();
+
   });
 
   it('should use Redis cache if data exists (Cache Hit)', async () => {
@@ -180,16 +187,16 @@ describe('DeviceDashboardService', () => {
   });
   it('should function correctly when Redis is not provided', async () => {
       const serviceNoRedis = new DeviceDashboardService({ ...mockOptions, redis: undefined });
-      try {
+     // try {
         mockOptions.findDeviceById.mockResolvedValue(mockDevice());
         mockValidator.mockReturnValue({ valid: true });
         mockMapper.mockReturnValue({ data: {} });
 
         const result = await serviceNoRedis.processTelemetry({ val: 1 }, { deviceId: 'dev-123' });
         expect(result.approved).toBe(true);
-      } finally {
+      /*} finally {
         serviceNoRedis.onModuleDestroy();
-      }
+      }*/
   });
   it('should fallback to DB if Redis cache JSON is invalid', async () => {
     await mockRedis.set('cache:device:dev-1', 'INVALID_JSON');
@@ -199,22 +206,11 @@ describe('DeviceDashboardService', () => {
     mockMapper.mockReturnValue({ deviceId: 'dev-1', data: {}, timestamp: '', raw: {} });
 
     const result = await service.processTelemetry({}, { deviceId: 'dev-1' });
+    expect(mockOptions.findDeviceById).toHaveBeenCalled();
 
     expect(result.approved).toBe(true);
   });
-  it('should throw if onTelemetry fails', async () => {
-    mockOptions.findDeviceById.mockResolvedValue(mockDevice());
-    mockValidator.mockReturnValue({ valid: true });
-    mockMapper.mockReturnValue({ deviceId: 'dev-1', data: {}, timestamp: '', raw: {} });
 
-    mockOptions.onTelemetry.mockRejectedValue(new Error('fail'));
-
-    await expect(
-      service.processTelemetry({}, { deviceId: 'dev-1' })
-    ).rejects.toThrow();
-  });
-
-  // 1. Test za DATABASE_FAILURE
   it('should throw PluginErrorCode.DATABASE_FAILURE if findDeviceById fails', async () => {
     mockOptions.findDeviceById.mockRejectedValue(new Error('DB is down'));
 
@@ -223,7 +219,7 @@ describe('DeviceDashboardService', () => {
     ).rejects.toThrow(PluginErrorCode.DATABASE_FAILURE);
   });
 
-  // 2. Test za CONFIG_MISSING
+
   it('should throw PluginErrorCode.CONFIG_MISSING if mapping is missing', async () => {
     mockOptions.findDeviceById.mockResolvedValue({
       model: 'modelF',
@@ -237,7 +233,6 @@ describe('DeviceDashboardService', () => {
   });
   
 
-  // 3. Test za HOOK_FAILED
   it('should throw PluginErrorCode.HOOK_FAILED if onTelemetry hook fails', async () => {
     mockOptions.findDeviceById.mockResolvedValue(mockDevice());
     mockValidator.mockReturnValue({ valid: true });
@@ -262,6 +257,227 @@ describe('DeviceDashboardService', () => {
     mockOptions.findDeviceById.mockResolvedValue(mockDevice({ schema: null }));
     await expect(service.processTelemetry({}, { deviceId: 'x' }))
       .rejects.toThrow(PluginErrorCode.CONFIG_MISSING);
+  });
+  it('should throw PluginErrorCode.SCHEMA_COMPILE_ERROR when validator throws', async () => {
+    mockOptions.findDeviceById.mockResolvedValue(mockDevice());
+
+    mockValidator.mockImplementation(() => {
+      throw new Error('AJV compile failed');
+    });
+
+    await expect(
+      service.processTelemetry({}, { deviceId: 'dev-1' }),
+    ).rejects.toThrow(PluginErrorCode.SCHEMA_COMPILE_ERROR);
+  });
+  it('should throw PluginErrorCode.NORMALIZATION_FAILED when mapper throws', async () => {
+    mockOptions.findDeviceById.mockResolvedValue(mockDevice());
+
+    mockValidator.mockReturnValue({
+      valid: true,
+      errors: [],
+    });
+
+    mockMapper.mockImplementation(() => {
+      throw new Error('mapping failed');
+    });
+
+    await expect(
+      service.processTelemetry({}, { deviceId: 'dev-1' }),
+    ).rejects.toThrow(PluginErrorCode.NORMALIZATION_FAILED);
+  });
+
+  it('should throw PluginErrorCode.NORMALIZATION_FAILED when mapper returns null', async () => {
+    mockOptions.findDeviceById.mockResolvedValue(mockDevice());
+
+    mockValidator.mockReturnValue({
+      valid: true,
+      errors: [],
+    });
+
+    mockMapper.mockReturnValue(null);
+
+    await expect(
+      service.processTelemetry({}, { deviceId: 'dev-1' }),
+    ).rejects.toThrow(PluginErrorCode.NORMALIZATION_FAILED);
+  });
+  it('should throw PluginErrorCode.INVALID_TIMESTAMP when hook returns INVALID_TIMESTAMP', async () => {
+    mockOptions.findDeviceById.mockResolvedValue(mockDevice());
+
+    mockValidator.mockReturnValue({
+      valid: true,
+      errors: [],
+    });
+
+    mockMapper.mockReturnValue({
+      deviceId: 'dev-1',
+      data: {},
+      timestamp: '',
+      raw: {},
+    });
+
+    mockOptions.onTelemetry.mockRejectedValue(
+      new Error('INVALID_TIMESTAMP'),
+    );
+
+    await expect(
+      service.processTelemetry({}, { deviceId: 'dev-1' }),
+    ).rejects.toThrow(PluginErrorCode.INVALID_TIMESTAMP);
+  });
+  it('should reject array payload', async () => {
+    const result = await service.processTelemetry(
+      [1, 2, 3],
+      { deviceId: 'dev-1' },
+    );
+
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe('INVALID_PAYLOAD_FORMAT');
+  });
+  it('should work when onTelemetry hook is not configured', async () => {
+    const serviceNoHook = new DeviceDashboardService({
+      ...mockOptions,
+      onTelemetry: undefined,
+    });
+
+   // try {
+      mockOptions.findDeviceById.mockResolvedValue(mockDevice());
+
+      mockValidator.mockReturnValue({
+        valid: true,
+        errors: [],
+      });
+
+      mockMapper.mockReturnValue({
+        deviceId: 'dev-1',
+        data: {},
+        timestamp: '',
+        raw: {},
+      });
+
+      const result = await serviceNoHook.processTelemetry(
+        {},
+        { deviceId: 'dev-1' },
+      );
+
+      expect(result.approved).toBe(true);
+   /* } finally {
+      serviceNoHook.onModuleDestroy();
+    }*/
+  });
+  it('should process status when onStatusChange hook is not configured', async () => {
+    const serviceNoHook = new DeviceDashboardService({
+      ...mockOptions,
+      onStatusChange: undefined,
+    });
+
+    //try {
+      await expect(
+        serviceNoHook.processStatus(
+          { status: 'ONLINE' },
+          { deviceId: 'dev-1' },
+        ),
+      ).resolves.toBeUndefined();
+   /* } finally {
+      serviceNoHook.onModuleDestroy();
+    }*/
+  });
+  it('should ignore status when deviceId is missing', async () => {
+    await service.processStatus(
+      { status: 'ONLINE' },
+      {} as any,
+    );
+
+    expect(
+      mockOptions.onStatusChange,
+    ).not.toHaveBeenCalled();
+  });
+  it('should process OFFLINE status update', async () => {
+    await service.processStatus(
+      { status: 'offline' },
+      { deviceId: 'dev-123' },
+    );
+
+    expect(mockOptions.onStatusChange)
+      .toHaveBeenCalledWith(
+        'dev-123',
+        'OFFLINE',
+      );
+  });
+  it('should rethrow ForbiddenException from onTelemetry hook', async () => {
+    mockOptions.findDeviceById.mockResolvedValue(mockDevice());
+
+    mockValidator.mockReturnValue({
+      valid: true,
+      errors: [],
+    });
+
+    mockMapper.mockReturnValue({
+      deviceId: 'dev-1',
+      data: {},
+      timestamp: '',
+      raw: {},
+    });
+
+    const error = new ForbiddenException();
+
+    mockOptions.onTelemetry.mockRejectedValue(error);
+
+    await expect(
+      service.processTelemetry(
+        {},
+        { deviceId: 'dev-1' },
+      ),
+    ).rejects.toThrow(ForbiddenException);
+  });
+  it('should rethrow NotFoundException from onTelemetry hook', async () => {
+    mockOptions.findDeviceById.mockResolvedValue(mockDevice());
+
+    mockValidator.mockReturnValue({
+      valid: true,
+      errors: [],
+    });
+
+    mockMapper.mockReturnValue({
+      deviceId: 'dev-1',
+      data: {},
+      timestamp: '',
+      raw: {},
+    });
+
+    mockOptions.onTelemetry.mockRejectedValue(
+      new NotFoundException(),
+    );
+
+    await expect(
+      service.processTelemetry(
+        {},
+        { deviceId: 'dev-1' },
+      ),
+    ).rejects.toThrow(NotFoundException);
+  });
+
+  it('should rethrow ForbiddenException from status hook', async () => {
+    mockOptions.onStatusChange.mockRejectedValue(
+      new ForbiddenException(),
+    );
+
+    await expect(
+      service.processStatus(
+        { status: 'ONLINE' },
+        { deviceId: 'dev-1' },
+      ),
+    ).rejects.toThrow(ForbiddenException);
+  });
+  it('should rethrow NotFoundException from status hook', async () => {
+    mockOptions.onStatusChange.mockRejectedValue(
+      new NotFoundException(),
+    );
+
+    await expect(
+      service.processStatus(
+        { status: 'ONLINE' },
+        { deviceId: 'dev-1' },
+      ),
+    ).rejects.toThrow(NotFoundException);
   });
 
 });

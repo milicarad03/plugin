@@ -1,4 +1,3 @@
-//const { normalizeWithMapping } = require("../../src/mapping-normalizer");
 import { normalizeWithMapping,logger } from "../../src/mapping-normalizer";
 
 describe("Mapping Normalizer", () => {
@@ -185,7 +184,7 @@ describe("Mapping Normalizer", () => {
     const mapping = {
       fields: {
         pressure: { path: "performance.stages.p1" },
-        temp: { path: "performance.temp" } // Ovo polje ne postoji u message
+        temp: { path: "performance.temp" } 
       }
     };
     const message = { performance: { stages: { p1: 4.5 } } };

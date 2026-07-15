@@ -1,4 +1,3 @@
-//const { validateTelemetryPayload, ajv, clearValidatorCache } = require("../../src/newvalidator");
 import  { validateTelemetryPayload, ajv, clearValidatorCache } from "../../src/newvalidator"
 const schema = {
   type: "object",

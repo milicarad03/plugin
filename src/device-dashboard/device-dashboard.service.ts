@@ -2,7 +2,7 @@
 import fs from "fs";
 import path from "path";
 
-import { Inject, Injectable, Logger, NotFoundException, ForbiddenException, HttpException, OnModuleDestroy} from "@nestjs/common";
+import { Inject, Injectable, Logger, NotFoundException, ForbiddenException, HttpException} from "@nestjs/common";
 import {
   DEVICE_DASHBOARD_OPTIONS,
   type DeviceDashboardModuleOptions,
@@ -15,26 +15,6 @@ import { LazyModuleLoader } from "@nestjs/core";
 import { normalizeWithMapping } from "src/mapping-normalizer";
 import { MappingDefinition } from "src/mapping-normalizer";
 import { PluginErrorCode } from "../device-registry.interface";
-
-
-function loadMapping(deviceId: string) {
-  const filePath = path.join(process.cwd(), "schema", deviceId,"mapper.json");
-
-  if (!fs.existsSync(filePath)) {
-    throw new Error(`[MAPPING] Missing mapping for model: ${deviceId}`);
-  }
-
-  
-  const mapping = JSON.parse(fs.readFileSync(filePath, "utf8"));
-
-  
-  if (!mapping.fields) {
-    throw new Error(`[MAPPING] Invalid mapping format for ${deviceId}`);
-  }
-
-  return mapping;
-
-}
 
 export type TelemetryContext = {
   deviceId: string;
@@ -57,18 +37,18 @@ class PluginLogger extends Logger {
 
 
 @Injectable()
-export class DeviceDashboardService implements OnModuleDestroy {
+export class DeviceDashboardService  {
   constructor(
     @Inject(DEVICE_DASHBOARD_OPTIONS)
     private readonly options: DeviceDashboardModuleOptions,
   ) {
-    this.startOfflineMonitor();
+  //  this.startOfflineMonitor();
   }
   private readonly logger = new PluginLogger(DeviceDashboardService.name);
   private readonly DEVICE_TTL = 60 * 1000;
   private readonly CACHE_TTL = 60;
-  private readonly lastSeen = new Map<string, number>();
-  private offlineMonitorHandle: NodeJS.Timeout | null = null; // <-- dodato
+ // private readonly lastSeen = new Map<string, number>();
+ // private offlineMonitorHandle: NodeJS.Timeout | null = null; // <-- dodato
   private validateDevice(device: any) {
 
     if (!device) {
@@ -220,7 +200,11 @@ export class DeviceDashboardService implements OnModuleDestroy {
       };
     }
     this.logger.log(`[VALIDATION] Success! Payload structure is valid.`);
-    this.lastSeen.set(deviceId, Date.now());
+  //  this.lastSeen.set(deviceId, Date.now());
+
+   /* if (device.status === "OFFLINE") {
+      await this.options.onStatusChange?.(deviceId, "ONLINE");
+    }*/
     this.logger.debug(`[NORMALIZATION] Transforming device data using defined mapping rules.`);
 
     let telemetry;
@@ -259,9 +243,9 @@ export class DeviceDashboardService implements OnModuleDestroy {
 
     if (!deviceId) {
      this.logger.warn("[STATUS] Device status rejected. Missing deviceId.");
-      
       return;
     }
+ 
 
     const statusObject = this.asRecord(statusPayload);
 
@@ -269,8 +253,9 @@ export class DeviceDashboardService implements OnModuleDestroy {
       this.logger.warn(`[STATUS] Device ${deviceId} sent an invalid status object.`);
       return;
     }
+   
+   // this.lastSeen.set(deviceId, Date.now());
 
-    this.lastSeen.set(deviceId, Date.now());
 
 
     const status = String(statusObject.status ?? "unknown");
@@ -361,8 +346,8 @@ export class DeviceDashboardService implements OnModuleDestroy {
     }
     const latest = await this.options.getLatestTelemetry(deviceId);
     if (this.isCommandRedundant(latest?.data, command, payload)) {
-    return; 
-  }
+      return; 
+    }
 
     const validation = validateDeviceCommand( device.schema, command, payload );
 
@@ -438,12 +423,23 @@ async getCommandMetadata(deviceId: string) {
     })
   );
 }
-private startOfflineMonitor() {
+/*private startOfflineMonitor() {
   this.offlineMonitorHandle = setInterval(async () => {
     const now = Date.now();
 
     for (const [deviceId, lastSeen] of this.lastSeen.entries()) {
-      if (now - lastSeen > this.DEVICE_TTL) {
+
+        if (now - lastSeen <= this.DEVICE_TTL) {
+          continue;
+        }
+
+        const device = await this.options.findDeviceById(deviceId);
+
+        if (!device) {
+          this.logger.debug(`[OFFLINE DETECTOR] Removing stale device ${deviceId}`);
+          this.lastSeen.delete(deviceId);
+          continue;
+        }
         this.logger.warn(`[OFFLINE DETECTOR] Device ${deviceId} marked OFFLINE`);
 
         try {
@@ -455,7 +451,7 @@ private startOfflineMonitor() {
         }
 
         this.lastSeen.delete(deviceId);
-      }
+      
     }
   }, 30000);
 }
@@ -465,7 +461,7 @@ private startOfflineMonitor() {
       this.offlineMonitorHandle = null;
     }
   }
-
+*/
 
 
   async checkDevice(deviceId: string) {
@@ -507,26 +503,6 @@ private startOfflineMonitor() {
       "iot/devices/+/telemetry",
       "iot/devices/+/status",
     ];
-  }
-
-  private normalizeTelemetry(message: unknown, deviceId: string): DeviceTelemetry | null {
-    const messageObject = this.asRecord(message);
-
-    if (!messageObject) {
-      return null;
-    }
-
-    const telemetryObject = this.asRecord(messageObject.telemetry);
-
-    if (!telemetryObject) {
-      return null;
-    }
-
-    return {
-      deviceId,
-      timestamp: new Date().toISOString(),
-      data: telemetryObject,
-    };
   }
 
   private asRecord(value: unknown): Record<string, unknown> | null {

@@ -1,5 +1,3 @@
-// plugin-src/device-core.service.ts
-
 import type { RegisteredDevice } from "./device-registry.interface";
 
 export type DeviceTelemetry = {
@@ -19,7 +17,7 @@ export class DeviceCoreService {
 
     private readonly findByDeviceId: (deviceId: string) => Promise<RegisteredDevice | null>,
     private readonly onTelemetry?: (telemetry: DeviceTelemetry) => Promise<void> | void,
-    private readonly onStatusChange?: (status: DeviceStatus) => Promise<void> | void // Opciono, ako host želi da sačuva status
+    private readonly onStatusChange?: (status: DeviceStatus) => Promise<void> | void 
   ) {}
 
   
