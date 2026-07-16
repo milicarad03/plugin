@@ -116,15 +116,18 @@ describe("Mapping Normalizer", () => {
     expect(result!.data.first).toBe("a");
   });
 
-  it("should return null if mapping is null/undefined", () => {
-      
-    const resultNull = normalizeWithMapping({}, "device1", null as any);
-    expect(resultNull).toBeNull();
-
-    const resultUndefined = normalizeWithMapping({}, "device1", undefined as any);
-    expect(resultUndefined).toBeNull();
-
+  it("should throw when mapping is null", () => {
+    expect(() =>
+      normalizeWithMapping({}, "device1", null as any)
+    ).toThrow("Invalid mapping definition");
   });
+
+  it("should throw when mapping is undefined", () => {
+    expect(() =>
+      normalizeWithMapping({}, "device1", undefined as any)
+    ).toThrow("Invalid mapping definition");
+  });
+
 
   it("should handle path that points to a property with undefined value", () => {
     const mapping = { fields: { val: { path: "a.b" } } };
@@ -210,6 +213,7 @@ describe("Mapping Normalizer", () => {
     const result = normalizeWithMapping(message, "device1", mapping);
     expect(result!.data.val).toBeUndefined(); 
   });
+
   it("should handle duplicated mapping paths safely", () => {
     const mapping = {
       fields: {
@@ -224,6 +228,64 @@ describe("Mapping Normalizer", () => {
 
     expect(result!.data.a).toBe(100);
     expect(result!.data.b).toBe(100);
+  });
+
+  it("should safely ignore constructor access attempts", () => {
+    const mapping = {
+      fields: {
+        test: { path: "constructor.name" }
+      }
+    };
+
+    const result = normalizeWithMapping(
+      {},
+      "device1",
+      mapping
+    );
+
+    expect(result!.data.test).toBeUndefined();
+  });
+  it(("should safely ignore direct prototype path access"), () => {
+    const mapping = {
+      fields: {
+        test: { path: "prototype.test" }
+      }
+    };
+
+    const result = normalizeWithMapping(
+      {},
+      "device1",
+      mapping
+    );
+
+    expect(result!.data.test).toBeUndefined();
+  });
+  it("should throw when mapping.fields is missing", () => {
+    expect(() =>
+      normalizeWithMapping(
+        {},
+        "device1",
+        {} as any
+      )
+    ).toThrow("Invalid mapping definition");
+  });
+  it("should return null for string message", () => {
+    const result = normalizeWithMapping(
+      "invalid",
+      "device1",
+      mapping
+    );
+
+    expect(result).toBeNull();
+  });
+  it("should return null for numeric message", () => {
+    const result = normalizeWithMapping(
+      123,
+      "device1",
+      mapping
+    );
+
+    expect(result).toBeNull();
   });
 
 });

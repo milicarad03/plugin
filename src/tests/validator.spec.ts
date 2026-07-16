@@ -1,4 +1,6 @@
-import  { validateTelemetryPayload, ajv, clearValidatorCache } from "../../src/newvalidator"
+import  { validateTelemetryPayload, ajv, clearValidatorCache, validateDeviceCommand } from "../../src/newvalidator"
+import { PluginErrorCode } from "src/device-registry.interface";
+
 const schema = {
   type: "object",
   properties: {
@@ -108,17 +110,27 @@ describe("Validator", () => {
       expect(result.errors[0]).toMatch(/Schema ID mismatch/);
     });
 
-    it("should handle null message safely", () => {
-    const result = validateTelemetryPayload("modelF", schema, null);
-
-    expect(result.valid).toBe(false);
+  it("should throw CONFIG_MISSING when message is null", () => {
+    expect(() =>
+      validateTelemetryPayload(
+        "modelF",
+        schema,
+        null
+      )
+    ).toThrow(PluginErrorCode.CONFIG_MISSING);
   });
-  it("should handle malformed schema object", () => {
-    const invalidSchema = { type: "NOT_A_VALID_TYPE" };
-    const result = validateTelemetryPayload("bad-schema", invalidSchema, { schemaId: "bad-schema" });
-    
-    expect(result.valid).toBe(false);
-    expect(result.errors.length).toBeGreaterThan(0); 
+  it("should throw CONFIG_MISSING for malformed schema", () => {
+    const invalidSchema = {
+      type: "NOT_A_VALID_TYPE"
+    };
+
+    expect(() =>
+      validateTelemetryPayload(
+        "bad-schema",
+        invalidSchema,
+        { schemaId: "bad-schema" }
+      )
+    ).toThrow(PluginErrorCode.CONFIG_MISSING);
   });
 
   it("should update cache priority when accessing an existing entry", () => {
@@ -144,14 +156,18 @@ describe("Validator", () => {
     const result = validateTelemetryPayload("", schema, { schemaId: "" });
     expect(result.valid).toBe(false); // jer schemaId neće biti prazan string u msg
   });
-  it("should handle AJV compile error gracefully", () => {
-    jest.spyOn(ajv, 'compile').mockImplementation(() => {
+  it("should throw CONFIG_MISSING when AJV compile fails", () => {
+    jest.spyOn(ajv, "compile").mockImplementation(() => {
       throw new Error("compile fail");
     });
 
-    const result = validateTelemetryPayload("modelX", schema, { schemaId: "modelX" });
-
-    expect(result.valid).toBe(false);
+    expect(() =>
+      validateTelemetryPayload(
+        "modelX",
+        schema,
+        { schemaId: "modelX" }
+      )
+    ).toThrow(PluginErrorCode.CONFIG_MISSING);
   });
   it("should reject when schemaId mismatches but structure is valid", () => {
     const msg = { schemaId: "wrong", value: 10 };
@@ -243,6 +259,178 @@ describe("Validator", () => {
       expect(compileSpy).toHaveBeenCalledTimes(2);
 
       compileSpy.mockRestore();
+  });
+  it("should clear validator cache", () => {
+    const compileSpy = jest.spyOn(ajv, "compile");
+
+    validateTelemetryPayload(
+      "modelF",
+      schema,
+      { schemaId: "modelF", value: 10 }
+    );
+
+    clearValidatorCache();
+
+    validateTelemetryPayload(
+      "modelF",
+      schema,
+      { schemaId: "modelF", value: 10 }
+    );
+
+    expect(compileSpy).toHaveBeenCalledTimes(2);
+  });
+  describe("validateDeviceCommand", () => {
+    const commandSchema = {
+      commands: {
+        SET_LED: {
+          payload: {
+            type: "object",
+            properties: {
+              value: {
+                type: "boolean"
+              }
+            },
+            required: ["value"]
+          }
+        },
+
+        SET_MODE: {
+          payload: {
+            type: "object",
+            properties: {
+              mode: {
+                type: "string"
+              }
+            },
+            required: ["mode"]
+          }
+        }
+      }
+    };
+
+    it("should validate correct command payload", () => {
+      const result = validateDeviceCommand(
+        commandSchema,
+        "SET_LED",
+        { value: true }
+      );
+
+      expect(result.valid).toBe(true);
+      expect(result.errors).toEqual([]);
+    });
+
+    it("should reject unsupported command", () => {
+      const result = validateDeviceCommand(
+        commandSchema,
+        "UNKNOWN_COMMAND",
+        {}
+      );
+
+      expect(result.valid).toBe(false);
+      expect(result.errors[0]).toContain(
+        "not supported"
+      );
+    });
+
+    it("should reject command without payload schema", () => {
+      const schemaWithoutPayload = {
+        commands: {
+          SET_LED: {}
+        }
+      };
+
+      const result = validateDeviceCommand(
+        schemaWithoutPayload,
+        "SET_LED",
+        {}
+      );
+
+      expect(result.valid).toBe(false);
+      expect(result.errors[0]).toContain(
+        "no payload schema"
+      );
+    });
+
+    it("should reject invalid payload type", () => {
+      const result = validateDeviceCommand(
+        commandSchema,
+        "SET_LED",
+        { value: "wrong" }
+      );
+
+      expect(result.valid).toBe(false);
+      expect(result.errors.length).toBeGreaterThan(0);
+    });
+
+    it("should reject missing required payload field", () => {
+      const result = validateDeviceCommand(
+        commandSchema,
+        "SET_LED",
+        {}
+      );
+
+      expect(result.valid).toBe(false);
+      expect(result.errors[0]).toMatch(
+        /must have required property/
+      );
+    });
+
+    it("should validate another command correctly", () => {
+      const result = validateDeviceCommand(
+        commandSchema,
+        "SET_MODE",
+        { mode: "AUTO" }
+      );
+
+      expect(result.valid).toBe(true);
+    });
+
+    it("should reject nested payload mismatch", () => {
+      const nestedSchema = {
+        commands: {
+          SET_CONFIG: {
+            payload: {
+              type: "object",
+              properties: {
+                config: {
+                  type: "object",
+                  properties: {
+                    interval: {
+                      type: "number"
+                    }
+                  },
+                  required: ["interval"]
+                }
+              }
+            }
+          }
+        }
+      };
+
+      const result = validateDeviceCommand(
+        nestedSchema,
+        "SET_CONFIG",
+        {
+          config: {
+            interval: "bad"
+          }
+        }
+      );
+
+      expect(result.valid).toBe(false);
+    });
+
+    it("should return payload-prefixed validation errors", () => {
+      const result = validateDeviceCommand(
+        commandSchema,
+        "SET_LED",
+        {}
+      );
+
+      expect(result.errors[0]).toContain(
+        "payload"
+      );
+    });
   });
 
 });
