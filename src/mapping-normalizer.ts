@@ -1,5 +1,6 @@
 import { Logger } from "@nestjs/common";
 //const logger = new Logger("MappingNormalizer");
+import { ConfigMissingException } from "./exceptions/plugin.exceptions";
 class PluginLogger extends Logger {
   override debug(message: string) {
     if (process.env.LOG_LEVEL === 'debug') {
@@ -9,7 +10,10 @@ class PluginLogger extends Logger {
 }
 export const logger = new PluginLogger("MappingNormalizer");
 export type MappingDefinition = {
-  fields: Record<string,{path: string;}>;
+  fields: Record<string,{
+    path: string;
+    itemMapping?: Record<string, string>;
+  }>;
 };
 
 
@@ -41,7 +45,7 @@ export function normalizeWithMapping(
 
   if (!mapping || !mapping.fields) {
     logger.warn(`[MAPPER] Normalization aborted for device ${deviceId}: Invalid mapping definition.`);
-    throw new Error(`[MAPPER] Invalid mapping definition for device ${deviceId}`);
+   throw new ConfigMissingException();
  
   }
 
@@ -49,12 +53,33 @@ export function normalizeWithMapping(
   logger.debug(`[MAPPER] Starting data extraction for device: ${deviceId}`);
 
   for (const targetKey of Object.keys(mapping.fields)) {
-    const { path } = mapping.fields[targetKey];
+    const { path, itemMapping} = mapping.fields[targetKey];
 
     const value = getValueByPath(message, path);
 
     if (value !== undefined) {
-      data[targetKey] = value;
+  
+      if (Array.isArray(value) && itemMapping) {
+
+        data[targetKey] = value.map((item: any) => {
+
+        const mappedItem: Record<string, unknown> = {};
+
+        for (const [targetField, sourceField] of Object.entries(itemMapping)) {
+
+          mappedItem[targetField] = item?.[sourceField];
+        }
+
+        return mappedItem;
+
+      });
+
+      } else {
+        data[targetKey] = value;
+      }
+    
+     // data[targetKey] = value;
+     logger.debug(`[MAPPER] Extracted: "${targetKey}" from path "${path}" -> Value: ${JSON.stringify(data[targetKey])}`);
       logger.debug(`[MAPPER] Extracted: "${targetKey}" from path "${path}" -> Value: ${JSON.stringify(value)}`);
     }else {
       logger.debug(`[MAPPER] Missing field in payload: Path "${path}" for target key "${targetKey}" resolved to undefined.`);

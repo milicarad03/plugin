@@ -15,6 +15,18 @@ import { LazyModuleLoader } from "@nestjs/core";
 import { normalizeWithMapping } from "src/mapping-normalizer";
 import { MappingDefinition } from "src/mapping-normalizer";
 import { PluginErrorCode } from "../device-registry.interface";
+import {
+  DeviceNotFoundException,
+  DeviceOfflineException,
+  DeviceUninitializedException,
+  ConfigMissingException,
+  ConfigMismatchException,
+  NormalizationFailedException,
+  HookFailedException,
+  InvalidTimestampException,
+  SchemaCompileException,
+  DeviceSchemaMissingException, DatabaseFailureException, CommandValidationException
+} from '../exceptions/plugin.exceptions';
 
 export type TelemetryContext = {
   deviceId: string;
@@ -49,20 +61,19 @@ export class DeviceDashboardService  {
   private readonly CACHE_TTL = 60;
  // private readonly lastSeen = new Map<string, number>();
  // private offlineMonitorHandle: NodeJS.Timeout | null = null; // <-- dodato
-  private validateDevice(device: any) {
-
-    if (!device) {
-      throw new Error("DEVICE_NOT_FOUND");
-    }
-
-    if (device.status === "OFFLINE") {
-      throw new Error("DEVICE_OFFLINE");
-    }
-
-    if (device.status === "UNINITIALIZED") {
-      throw new Error("DEVICE_UNINITIALIZED");
-    }
+  private validateDevice(device: any, deviceId: string) {
+  if (!device) {
+    throw new DeviceNotFoundException(deviceId);
   }
+
+  if (device.status === "OFFLINE") {
+    throw new DeviceOfflineException(deviceId);
+  }
+
+  if (device.status === "UNINITIALIZED") {
+    throw new DeviceUninitializedException(deviceId);
+  }
+}
   private isCommandRedundant(latestData: any, command: string, payload: any): boolean {
     if (!latestData) return false;
 
@@ -121,7 +132,7 @@ export class DeviceDashboardService  {
           device = await this.options.findDeviceById(deviceId);
         } catch (err: any) {
           this.logger.error(`[DATABASE] Failed loading device ${deviceId}: ${err.message}`);
-          throw new Error(PluginErrorCode.DATABASE_FAILURE);
+          throw new DatabaseFailureException(err.message);
         }
   
       if (device && redisClient) {
@@ -159,12 +170,12 @@ export class DeviceDashboardService  {
 
     if (!map) {
       this.logger.warn(`[DENIED] Missing mapping definitions for version: ${device.model}`);
-      throw new Error(PluginErrorCode.CONFIG_MISSING);
+    throw new ConfigMissingException();
     }
 
     if (!sch) {
       this.logger.warn(`[DENIED] Missing JSON schema for version: ${device.model}`);
-      throw new Error(PluginErrorCode.CONFIG_MISSING);
+      throw new ConfigMissingException();
     }
 
     if (sch.properties?.schemaId?.const !== device.model) {
@@ -172,7 +183,7 @@ export class DeviceDashboardService  {
         `[CONFIG MISMATCH] Device ${deviceId} is assigned to model '${device.model}', ` +
         `but its schema expects '${sch.properties?.schemaId?.const}'.`
       );
-      throw new Error(PluginErrorCode.CONFIG_MISMATCH);
+     throw new ConfigMismatchException();
     }
 
     this.logger.debug(`[VALIDATION] Running AJV structure check for model version: ${device.model}`);
@@ -188,7 +199,11 @@ export class DeviceDashboardService  {
       validation = validateTelemetryPayload(device.model, sch, messageWithId);
     } catch (err: any) {
       this.logger.error(`[VALIDATION] Schema compilation failed for model ${device.model}: ${err.message}`);
-      throw new Error(PluginErrorCode.SCHEMA_COMPILE_ERROR);
+      if (err instanceof SchemaCompileException) {
+        throw err;
+
+      }
+      throw err;
     }
 
     if (!validation.valid) {
@@ -212,9 +227,9 @@ export class DeviceDashboardService  {
       telemetry = normalizeWithMapping(message, deviceId, device.mapping);
     } catch (err: any) {
       this.logger.error(`[NORMALIZATION] Mapping normalization threw for device ${deviceId}: ${err.message}`);
-      throw new Error(PluginErrorCode.NORMALIZATION_FAILED);
+      throw new NormalizationFailedException();
     }
-    if (!telemetry) throw new Error(PluginErrorCode.NORMALIZATION_FAILED);
+    if (!telemetry) throw new NormalizationFailedException();
 
     this.logger.debug(`[NORMALIZATION] Transformation result: ${JSON.stringify(telemetry.data)}`);
 
@@ -228,9 +243,9 @@ export class DeviceDashboardService  {
         throw err;
       }
       if (err.message === 'INVALID_TIMESTAMP') {
-        throw new Error(PluginErrorCode.INVALID_TIMESTAMP);
+       throw new InvalidTimestampException();
       }
-      throw new Error(PluginErrorCode.HOOK_FAILED);
+     throw new HookFailedException();
 
     
     }
@@ -278,7 +293,7 @@ export class DeviceDashboardService  {
         if (err instanceof NotFoundException || err instanceof ForbiddenException) {
           throw err;
         }
-        throw new Error(PluginErrorCode.HOOK_FAILED);
+        throw new HookFailedException();
 
       }
     }
@@ -300,12 +315,13 @@ export class DeviceDashboardService  {
     try{
 
       const device = await this.options.findDeviceById(deviceId);
+      
       if (!device) {
         this.logger.error(`[ORCHESTRATION] Device ${deviceId} not found.`);
-        throw new Error('DEVICE_NOT_FOUND')
+        throw new DeviceNotFoundException(deviceId);
       }
     
-      this.validateDevice(device);
+      this.validateDevice(device, deviceId);
       if (state === 'ACTIVE' && device.status === 'ACTIVE') return; 
       if (state === 'IDLE' && device.status === 'IDLE') return;
       const supportsSetMode = !!device.schema?.commands?.SET_MODE;
@@ -337,12 +353,12 @@ export class DeviceDashboardService  {
     const device = await this.options.findDeviceById(deviceId);
 
   
-    this.validateDevice(device);
+    this.validateDevice(device, deviceId);
     if (!device) {
-      throw new Error("DEVICE_NOT_FOUND");
+     throw new DeviceNotFoundException(deviceId);
     }
     if (!device.schema) {
-      throw new Error("DEVICE_SCHEMA_MISSING");
+      throw new DeviceSchemaMissingException(deviceId);
     }
     const latest = await this.options.getLatestTelemetry(deviceId);
     if (this.isCommandRedundant(latest?.data, command, payload)) {
@@ -352,7 +368,7 @@ export class DeviceDashboardService  {
     const validation = validateDeviceCommand( device.schema, command, payload );
 
     if (!validation.valid) {
-      throw new Error( validation.errors.join(", "));
+      throw new CommandValidationException(validation.errors);
     }
 
     if (command === "SET_STATE") {
@@ -403,9 +419,8 @@ private extractFields( schema: any, prefix = "", required: string[] = []): any[]
 async getCommandMetadata(deviceId: string) {
 
   const device = await this.options.findDeviceById(deviceId);
-
   if (!device) {
-    throw new Error("DEVICE_NOT_FOUND");
+     throw new DeviceNotFoundException(deviceId);
   }
 
   const commands = device.schema?.commands ?? {};

@@ -1,6 +1,7 @@
 import Ajv2020 from "ajv/dist/2020";
 import { Logger } from "@nestjs/common";
 import { PluginErrorCode } from "./device-registry.interface";
+import { ConfigMissingException, SchemaCompileException } from "./exceptions/plugin.exceptions";
 
 export const ajv = new Ajv2020({ allErrors: true });
 ajv.addKeyword("commands");
@@ -78,8 +79,7 @@ export function validateTelemetryPayload( cacheKey: string, schema: any, message
   } catch (err: any) {
 
     logger.error(`[VALIDATOR] Failed compiling schema ${cacheKey}: ${err.message}` );
-
-    throw new Error(PluginErrorCode.CONFIG_MISSING);
+    throw new SchemaCompileException();
 
   }
 }
