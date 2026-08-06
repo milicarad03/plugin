@@ -85,6 +85,8 @@ export function normalizeWithMapping(
       logger.debug(`[MAPPER] Missing field in payload: Path "${path}" for target key "${targetKey}" resolved to undefined.`);
     }
   }
+  logger.debug(`[MAPPER OUTPUT] ${JSON.stringify(data, null, 2)}`);
+  
 
   return {
     deviceId,

@@ -74,6 +74,98 @@ export class DeviceDashboardService  {
     throw new DeviceUninitializedException(deviceId);
   }
 }
+  private async loadDevice(deviceId: string) {
+    let device;
+    const redisClient = this.options.redis;
+
+    if (redisClient) {
+      try { 
+        const cachedData = await redisClient.get( `cache:device:${deviceId}`);
+
+        if (cachedData) {
+            this.logger.debug(`[REDIS CACHE] HIT -> Device ${deviceId} profile loaded from Redis RAM.`);
+            device = JSON.parse(cachedData);
+        }
+      } catch (err: any) {
+        this.logger.error(`[REDIS CACHE] Error reading from Redis: ${err.message}`);
+      }
+    }
+
+    if (!device) {
+      this.logger.debug(`[REDIS CACHE] MISS -> Fetching device ${deviceId} from database.` );
+      try {
+        device = await this.options.findDeviceById(deviceId);
+      } catch (err: any) {
+        this.logger.error(`[DATABASE] Failed loading device ${deviceId}: ${err.message}`);
+        throw new DatabaseFailureException(err.message);
+      }
+      if (device && redisClient) {
+        try {
+          this.logger.log(`[REDIS CACHE] Saving device ${deviceId} to Redis for ${this.CACHE_TTL}s.`);
+          await redisClient.set(`cache:device:${deviceId}`, JSON.stringify(device), 'EX', this.CACHE_TTL );
+        } catch (err: any) {
+          this.logger.error(`[REDIS CACHE] Error saving to Redis: ${err.message}` );
+        }
+      }
+    }
+    return device;
+  }
+  private validateDeviceConfiguration(device: any, deviceId:string) {
+    if (!device.mapping) {
+      this.logger.warn(`[DENIED] Missing mapping definitions for version: ${device.model}`);
+      throw new ConfigMissingException();
+    }
+
+    if (!device.schema){
+      this.logger.warn(`[DENIED] Missing JSON schema for version: ${device.model}`);
+      throw new ConfigMissingException();
+    }
+
+    if (device.schema.properties?.schemaId?.const !==  device.model) {
+      this.logger.error( `[CONFIG MISMATCH] Device ${deviceId} is assigned to model '${device.model}', ` +  `but its schema expects '${device.schema.properties?.schemaId?.const}'.`);
+      throw new ConfigMismatchException();
+    }
+
+  }
+  private validateSchema(device: any, message: unknown) {
+    const messageWithId = {  schemaId: device.model, ...(message as Record<string, any>),};
+
+    return validateTelemetryPayload(
+      device.model,
+      device.schema,
+      messageWithId
+    );
+  }
+  private async forwardTelemetry( telemetry: DeviceTelemetry, deviceId: string) {
+    try {
+      await this.options.onTelemetry?.(telemetry);
+    } catch (err: any) {
+      this.logger.error(`[HOOK] onTelemetry failed for ${deviceId}: ${err.message}`);
+
+      if (
+        err instanceof NotFoundException ||
+        err instanceof ForbiddenException ||
+        err instanceof InvalidTimestampException
+      ) {
+        throw err;
+      }
+      throw new HookFailedException();
+    }
+  }
+  private normalizeTelemetry(  message: unknown, deviceId: string, mapping: MappingDefinition) {
+    try {
+      const telemetry = normalizeWithMapping( message, deviceId, mapping);
+
+      if (!telemetry) {
+        throw new NormalizationFailedException();
+      }
+      return telemetry;
+    } catch (err: any) {
+      this.logger.error(`[NORMALIZATION] Mapping normalization failed for ${deviceId}: ${err.message}`);
+      throw new NormalizationFailedException();
+    }
+  }
+
   private isCommandRedundant(latestData: any, command: string, payload: any): boolean {
     if (!latestData) return false;
 
@@ -96,161 +188,54 @@ export class DeviceDashboardService  {
     return false;
   }
 
-  async processTelemetry(message: unknown,context: TelemetryContext): Promise<{ approved: boolean; reason?: string }> {
-
-    if (typeof message !== 'object' || message === null || Array.isArray(message)) {
-      this.logger.warn(`[DENIED] Malformed payload received for device ${context.deviceId}`);
-      return { approved: false, reason: "INVALID_PAYLOAD_FORMAT" };
-    }
-    const deviceId = context.deviceId;
-   
-    this.logger.debug(`[START] Received telemetry for device : ${deviceId || "UNKNOWN"}`);
-
-    if (!deviceId) {
-      this.logger.warn("[DENIED] Missing deviceId in message context.");
-      return { approved: false, reason: "MISSING_DEVICE_IDENTIFIER"};
-    }
-    const now=Date.now();
-    let device;
-    const redisClient = this.options.redis;
-
-    if (redisClient) {
-      try {
-        const cachedData = await redisClient.get(`cache:device:${deviceId}`);
-        if (cachedData) {
-          this.logger.debug(`[REDIS CACHE] HIT -> Device ${deviceId} profile loaded from Redis RAM.`);
-          device = JSON.parse(cachedData);
-        }
-      } catch (err: any) {
-        this.logger.error(`[REDIS CACHE] Error reading from Redis: ${err.message}`);
-      }
-    }
-
-    if(!device){
-      this.logger.debug(`[REDIS CACHE] MISS -> Fetching device ${deviceId} from database.`);
-        try {
-          device = await this.options.findDeviceById(deviceId);
-        } catch (err: any) {
-          this.logger.error(`[DATABASE] Failed loading device ${deviceId}: ${err.message}`);
-          throw new DatabaseFailureException(err.message);
-        }
   
-      if (device && redisClient) {
-          try {
-            this.logger.log(`[REDIS CACHE] Saving device ${deviceId} to Redis for ${this.CACHE_TTL}s.`);
-            await redisClient.set(
-              `cache:device:${deviceId}`, 
-              JSON.stringify(device), 
-              'EX', 
-              this.CACHE_TTL
-            );
-          } catch (err: any) {
-            this.logger.error(`[REDIS CACHE] Error saving to Redis: ${err.message}`);
-          }
-        }
-    }
-    
-    if (!device) {
-    this.logger.warn(`[DENIED] Device ${deviceId} does not exist in the database.`);
-      return { approved: false, reason: "DEVICE_NOT_FOUND" };
-    }
-    if (!device.model) {
-      this.logger.warn(`[DENIED] Device ${deviceId} has no assigned model version.`);
+  async processTelemetry( message: unknown, context: TelemetryContext): Promise<{ approved: boolean; reason?: string }> {
+
+    if ( typeof message !== "object" || message === null ||  Array.isArray(message)) {
       return {
         approved: false,
-        reason: "MISSING_MODEL_VERSION",
+        reason: "INVALID_PAYLOAD_FORMAT",
       };
     }
-    
 
-    const map=device.mapping;
-    const mapping = map as MappingDefinition;
-
-    const sch=device.schema;
-
-    if (!map) {
-      this.logger.warn(`[DENIED] Missing mapping definitions for version: ${device.model}`);
-    throw new ConfigMissingException();
+    const deviceId = context.deviceId;
+    this.logger.debug(`[START] Received telemetry for device : ${deviceId || "UNKNOWN"}`);
+    if (!deviceId) {
+      return { approved: false, reason: "MISSING_DEVICE_IDENTIFIER"};
     }
 
-    if (!sch) {
-      this.logger.warn(`[DENIED] Missing JSON schema for version: ${device.model}`);
-      throw new ConfigMissingException();
+    const device = await this.loadDevice(deviceId);
+
+    if (!device) {
+      return { approved: false, reason: "DEVICE_NOT_FOUND"};
     }
 
-    if (sch.properties?.schemaId?.const !== device.model) {
-      this.logger.error(
-        `[CONFIG MISMATCH] Device ${deviceId} is assigned to model '${device.model}', ` +
-        `but its schema expects '${sch.properties?.schemaId?.const}'.`
-      );
-     throw new ConfigMismatchException();
+    if (!device.model) {
+      this.logger.warn(`[DENIED] Device ${deviceId} has no assigned model version.`);
+      return { approved: false, reason: "MISSING_MODEL_VERSION"};
     }
 
+    this.validateDeviceConfiguration(device, deviceId);
     this.logger.debug(`[VALIDATION] Running AJV structure check for model version: ${device.model}`);
-    
-    const messageWithId = {
-      schemaId: device.model, 
-      ...(message as Record<string, any>) 
-    };
-        
-   
-    let validation;
-    try {
-      validation = validateTelemetryPayload(device.model, sch, messageWithId);
-    } catch (err: any) {
-      this.logger.error(`[VALIDATION] Schema compilation failed for model ${device.model}: ${err.message}`);
-      if (err instanceof SchemaCompileException) {
-        throw err;
 
-      }
-      throw err;
-    }
+    const validation = this.validateSchema( device, message);
 
     if (!validation.valid) {
       this.logger.warn(`[DENIED] Payload for device ${deviceId} failed JSON schema validation.`);
       this.logger.warn(`[VALIDATION ERRORS]: ${JSON.stringify(validation.errors)}`);
-      return {
-        approved: false,
-        reason: "INVALID_TELEMETRY_SCHEMA",
-      };
+      return {approved: false, reason: "INVALID_TELEMETRY_SCHEMA"};
     }
     this.logger.log(`[VALIDATION] Success! Payload structure is valid.`);
-  //  this.lastSeen.set(deviceId, Date.now());
-
-   /* if (device.status === "OFFLINE") {
-      await this.options.onStatusChange?.(deviceId, "ONLINE");
-    }*/
     this.logger.debug(`[NORMALIZATION] Transforming device data using defined mapping rules.`);
 
-    let telemetry;
-    try {
-      telemetry = normalizeWithMapping(message, deviceId, device.mapping);
-    } catch (err: any) {
-      this.logger.error(`[NORMALIZATION] Mapping normalization threw for device ${deviceId}: ${err.message}`);
-      throw new NormalizationFailedException();
-    }
-    if (!telemetry) throw new NormalizationFailedException();
-
+    const telemetry = this.normalizeTelemetry( message, deviceId, device.mapping );
     this.logger.debug(`[NORMALIZATION] Transformation result: ${JSON.stringify(telemetry.data)}`);
 
     this.logger.debug(`[SUCCESS] Forwarding normalized data to host application via onTelemetry hook...`);
-
-   try {
-      await this.options.onTelemetry?.(telemetry);
-    } catch (err: any) {
-      this.logger.error(`[HOOK] onTelemetry failed for ${deviceId}: ${err.message}`);
-      if (err instanceof NotFoundException || err instanceof ForbiddenException) {
-        throw err;
-      }
-      if (err.message === 'INVALID_TIMESTAMP') {
-       throw new InvalidTimestampException();
-      }
-     throw new HookFailedException();
-
-    
-    }
-
-    return { approved: true };
+    await this.forwardTelemetry( telemetry, deviceId);
+    return {
+      approved: true,
+    };
   }
 
   async processStatus(statusPayload: unknown, context: TelemetryContext): Promise<void> {
@@ -268,9 +253,6 @@ export class DeviceDashboardService  {
       this.logger.warn(`[STATUS] Device ${deviceId} sent an invalid status object.`);
       return;
     }
-   
-   // this.lastSeen.set(deviceId, Date.now());
-
 
 
     const status = String(statusObject.status ?? "unknown");
@@ -438,45 +420,7 @@ async getCommandMetadata(deviceId: string) {
     })
   );
 }
-/*private startOfflineMonitor() {
-  this.offlineMonitorHandle = setInterval(async () => {
-    const now = Date.now();
 
-    for (const [deviceId, lastSeen] of this.lastSeen.entries()) {
-
-        if (now - lastSeen <= this.DEVICE_TTL) {
-          continue;
-        }
-
-        const device = await this.options.findDeviceById(deviceId);
-
-        if (!device) {
-          this.logger.debug(`[OFFLINE DETECTOR] Removing stale device ${deviceId}`);
-          this.lastSeen.delete(deviceId);
-          continue;
-        }
-        this.logger.warn(`[OFFLINE DETECTOR] Device ${deviceId} marked OFFLINE`);
-
-        try {
-          await this.options.onStatusChange?.(deviceId, "OFFLINE");
-        } catch (err: any) {
-          this.logger.error(
-            `[OFFLINE DETECTOR] Failed updating ${deviceId}: ${err.message}`
-          );
-        }
-
-        this.lastSeen.delete(deviceId);
-      
-    }
-  }, 30000);
-}
- onModuleDestroy() {
-    if (this.offlineMonitorHandle) {
-      clearInterval(this.offlineMonitorHandle);
-      this.offlineMonitorHandle = null;
-    }
-  }
-*/
 
 
   async checkDevice(deviceId: string) {
