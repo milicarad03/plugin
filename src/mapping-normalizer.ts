@@ -12,7 +12,7 @@ export const logger = new PluginLogger("MappingNormalizer");
 export type MappingDefinition = {
   fields: Record<string,{
     path: string;
-    itemMapping?: Record<string, string>;
+    historyPath?: string;
   }>;
 };
 
@@ -53,36 +53,33 @@ export function normalizeWithMapping(
   logger.debug(`[MAPPER] Starting data extraction for device: ${deviceId}`);
 
   for (const targetKey of Object.keys(mapping.fields)) {
-    const { path, itemMapping} = mapping.fields[targetKey];
+    const { path, historyPath} = mapping.fields[targetKey];
 
     const value = getValueByPath(message, path);
-
-    if (value !== undefined) {
-  
-      if (Array.isArray(value) && itemMapping) {
-
-        data[targetKey] = value.map((item: any) => {
-
-        const mappedItem: Record<string, unknown> = {};
-
-        for (const [targetField, sourceField] of Object.entries(itemMapping)) {
-
-          mappedItem[targetField] = item?.[sourceField];
-        }
-
-        return mappedItem;
-
-      });
-
-      } else {
+     if (value !== undefined) {
         data[targetKey] = value;
+
+        logger.debug( `[MAPPER] Extracted "${targetKey}" from "${path}" => ${JSON.stringify(value)}`);
+      }else {
+        logger.debug(`[MAPPER] Missing field in payload: Path "${path}" for target key "${targetKey}" resolved to undefined.`);
+
+        }
+      if (historyPath) {
+
+      const historyValue = getValueByPath(message, historyPath);
+      if (historyValue !== undefined) {
+        const historical = (data.historicalTelemetry ?? {}) as Record<string, unknown>;
+
+        historical[targetKey] = historyValue;
+
+        data.historicalTelemetry =  historical;
+
+        logger.debug(`[MAPPER] Extracted history "${targetKey}" from "${historyPath}"`);
       }
-    
+  
      // data[targetKey] = value;
-     logger.debug(`[MAPPER] Extracted: "${targetKey}" from path "${path}" -> Value: ${JSON.stringify(data[targetKey])}`);
-      logger.debug(`[MAPPER] Extracted: "${targetKey}" from path "${path}" -> Value: ${JSON.stringify(value)}`);
-    }else {
-      logger.debug(`[MAPPER] Missing field in payload: Path "${path}" for target key "${targetKey}" resolved to undefined.`);
+     //logger.debug(`[MAPPER] Extracted: "${targetKey}" from path "${path}" -> Value: ${JSON.stringify(data[targetKey])}`);
+    // logger.debug(`[MAPPER] Extracted: "${targetKey}" from path "${path}" -> Value: ${JSON.stringify(value)}`);
     }
   }
   logger.debug(`[MAPPER OUTPUT] ${JSON.stringify(data, null, 2)}`);

@@ -166,12 +166,13 @@ export class DeviceDashboardService  {
     }
   }
 
-  private isCommandRedundant(latestData: any, command: string, payload: any): boolean {
+ /* private isCommandRedundant(latestData: any, command: string, payload: any): boolean {
     if (!latestData) return false;
 
     const stateMapping: Record<string, string> = {
       'SET_LED_COLOR': 'ledColor', 
       'SET_STATE': 'state',
+      'SET_LED': "led",
       'SET_OPERATING_PROFILE': 'operatingProfile'
     };
 
@@ -186,8 +187,118 @@ export class DeviceDashboardService  {
       return true;
     }
     return false;
+  }*/
+ private findTelemetryField( mapping: any,  statePath: string): string | null {
+
+    for (const [field, config] of Object.entries<any>(mapping?.fields ?? {})) {
+
+      if (config.path === statePath) {
+        return field;
+      }
+    }
+
+    return null;
+  }
+  private getLatestValue(latestData: any, field: string) {
+
+  const history = latestData?.[field];
+
+  if (!Array.isArray(history) ||  history.length === 0 ) {
+    return undefined;
   }
 
+  return history[ history.length - 1 ][0];
+}
+
+ /* private isCommandRedundant(
+  latestData: any,
+  command: string,
+  payload: any
+): boolean {
+
+  if (!latestData) {
+    return false;
+  }
+
+  if (command === "SET_LED") {
+
+    const history = latestData.led;
+
+    if (
+      !Array.isArray(history) ||
+      history.length === 0
+    ) {
+      return false;
+    }
+
+    const currentValue =
+      history[history.length - 1][0];
+
+    const requestedValue =
+      payload.value;
+
+    this.logger.debug(
+      `[REDUNDANCY] current=${currentValue} requested=${requestedValue}`
+    );
+
+    if (currentValue === requestedValue) {
+      this.logger.warn(
+        `[REDUNDANT] SET_LED ignored`
+      );
+
+      return true;
+    }
+
+    return false;
+  }
+
+  return false;
+}*/
+private isCommandRedundant(device: any, latestData: any, command: string, payload: any): boolean {
+  if (command === "SET_STATE") {
+    const currentState = device.telemetryState;
+    const requestedState =   payload.state;
+    return currentState === requestedState;
+  }
+
+  if (!latestData) {
+    return false;
+  }
+
+  const commandDef = device.schema?.commands?.[command];
+
+  if (!commandDef) {
+    return false;
+  }
+
+  const statePath = commandDef["x-state-path"];
+
+  const payloadField = commandDef["x-payload-field"];
+
+  if (!statePath || !payloadField) {
+    return false;
+  }
+
+  const telemetryField = this.findTelemetryField( device.mapping, statePath);
+
+  if (!telemetryField) {
+    return false;
+  }
+
+  const currentValue = this.getLatestValue( latestData, telemetryField);
+
+  const requestedValue =  payload[payloadField];
+
+  this.logger.debug(`[REDUNDANCY] command=${command} current=${currentValue} requested=${requestedValue}`);
+
+  if (currentValue === requestedValue) {
+    this.logger.warn( `[REDUNDANT] ${command} ignored`);
+
+    return true;
+    }
+
+  return false;
+}
   
   async processTelemetry( message: unknown, context: TelemetryContext): Promise<{ approved: boolean; reason?: string }> {
 
@@ -343,7 +454,13 @@ export class DeviceDashboardService  {
       throw new DeviceSchemaMissingException(deviceId);
     }
     const latest = await this.options.getLatestTelemetry(deviceId);
-    if (this.isCommandRedundant(latest?.data, command, payload)) {
+    
+
+    console.log(
+      "LATEST TELEMETRY:",
+      JSON.stringify(latest?.data, null, 2)
+    );
+    if (this.isCommandRedundant(device, latest?.data, command, payload)) {
       return; 
     }
 
