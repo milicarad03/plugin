@@ -5,6 +5,8 @@ import { ConfigMissingException, SchemaCompileException } from "./exceptions/plu
 
 export const ajv = new Ajv2020({ allErrors: true });
 ajv.addKeyword("commands");
+ajv.addKeyword("x-reporting");
+ajv.addKeyword("x-buffering");
 class PluginLogger extends Logger {
   override debug(message: string) {
     if (process.env.LOG_LEVEL === 'debug') {
@@ -49,15 +51,17 @@ function getValidator(cacheKey: string, schema: object) {
   return validator;
 }
 
-export function validateTelemetryPayload( cacheKey: string, schema: any, message: any): {
+export function validateTelemetryPayload(   expectedSchemaId: string, cacheKey: string, schema: any, message: any): {
   valid: boolean;
   errors: string[];
 } {
   try {
-    if (message.schemaId !== cacheKey) {  
-      return { 
-        valid: false, 
-        errors: [`Schema ID mismatch: expected ${cacheKey}, got ${message.schemaId}`] 
+    if (message.schemaId !== expectedSchemaId) {
+      return {
+        valid: false,
+        errors: [
+          `Schema ID mismatch: expected ${expectedSchemaId}, got ${message.schemaId}`
+        ]
       };
     }
     const validate = getValidator(cacheKey, schema);

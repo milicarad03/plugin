@@ -7,3 +7,7 @@ export type {DeviceRegistry, RegisteredDevice} from "./device-registry.interface
 export { DeviceCoreService } from './device.core.service';
 export { PluginErrorCode } from './device-registry.interface';
 export * from './exceptions/plugin.exceptions';
+export {
+  validateModelDefinition,
+  type ModelDefinitionValidationResult,
+} from './model-definition/model-definition.validator';

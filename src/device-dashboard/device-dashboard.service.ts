@@ -1,4 +1,3 @@
-
 import fs from "fs";
 import path from "path";
 
@@ -25,7 +24,9 @@ import {
   HookFailedException,
   InvalidTimestampException,
   SchemaCompileException,
-  DeviceSchemaMissingException, DatabaseFailureException, CommandValidationException
+  DeviceSchemaMissingException, 
+  DatabaseFailureException, 
+  CommandValidationException
 } from '../exceptions/plugin.exceptions';
 
 export type TelemetryContext = {
@@ -39,6 +40,7 @@ export type DeviceStatus = {
   timestamp?: string;
   status: string;
 };
+
 class PluginLogger extends Logger {
   override debug(message: string) {
     if (process.env.LOG_LEVEL === 'debug') {
@@ -46,7 +48,6 @@ class PluginLogger extends Logger {
     }
   }
 }
-
 
 @Injectable()
 export class DeviceDashboardService  {
@@ -56,24 +57,25 @@ export class DeviceDashboardService  {
   ) {
   //  this.startOfflineMonitor();
   }
+  
   private readonly logger = new PluginLogger(DeviceDashboardService.name);
   private readonly DEVICE_TTL = 60 * 1000;
   private readonly CACHE_TTL = 60;
- // private readonly lastSeen = new Map<string, number>();
- // private offlineMonitorHandle: NodeJS.Timeout | null = null; // <-- dodato
+
   private validateDevice(device: any, deviceId: string) {
-  if (!device) {
-    throw new DeviceNotFoundException(deviceId);
+    if (!device) {
+      throw new DeviceNotFoundException(deviceId);
+    }
+
+    if (device.status === "OFFLINE") {
+      throw new DeviceOfflineException(deviceId);
+    }
+
+    if (device.status === "UNINITIALIZED") {
+      throw new DeviceUninitializedException(deviceId);
+    }
   }
 
-  if (device.status === "OFFLINE") {
-    throw new DeviceOfflineException(deviceId);
-  }
-
-  if (device.status === "UNINITIALIZED") {
-    throw new DeviceUninitializedException(deviceId);
-  }
-}
   private async loadDevice(deviceId: string) {
     let device;
     const redisClient = this.options.redis;
@@ -110,6 +112,7 @@ export class DeviceDashboardService  {
     }
     return device;
   }
+
   private validateDeviceConfiguration(device: any, deviceId:string) {
     if (!device.mapping) {
       this.logger.warn(`[DENIED] Missing mapping definitions for version: ${device.model}`);
@@ -120,22 +123,29 @@ export class DeviceDashboardService  {
       this.logger.warn(`[DENIED] Missing JSON schema for version: ${device.model}`);
       throw new ConfigMissingException();
     }
+    
+    if (!device.version) {
+      this.logger.warn(`[DENIED] Missing model version for device ${deviceId}` );
+      throw new ConfigMissingException();
+    }
 
     if (device.schema.properties?.schemaId?.const !==  device.model) {
       this.logger.error( `[CONFIG MISMATCH] Device ${deviceId} is assigned to model '${device.model}', ` +  `but its schema expects '${device.schema.properties?.schemaId?.const}'.`);
       throw new ConfigMismatchException();
     }
-
   }
+
   private validateSchema(device: any, message: unknown) {
-    const messageWithId = {  schemaId: device.model, ...(message as Record<string, any>),};
+    const cacheKey = `${device.model}:${device.version}`;
 
     return validateTelemetryPayload(
       device.model,
+      cacheKey,
       device.schema,
-      messageWithId
+      message
     );
   }
+
   private async forwardTelemetry( telemetry: DeviceTelemetry, deviceId: string) {
     try {
       await this.options.onTelemetry?.(telemetry);
@@ -152,6 +162,7 @@ export class DeviceDashboardService  {
       throw new HookFailedException();
     }
   }
+
   private normalizeTelemetry(  message: unknown, deviceId: string, mapping: MappingDefinition) {
     try {
       const telemetry = normalizeWithMapping( message, deviceId, mapping);
@@ -166,139 +177,67 @@ export class DeviceDashboardService  {
     }
   }
 
- /* private isCommandRedundant(latestData: any, command: string, payload: any): boolean {
-    if (!latestData) return false;
-
-    const stateMapping: Record<string, string> = {
-      'SET_LED_COLOR': 'ledColor', 
-      'SET_STATE': 'state',
-      'SET_LED': "led",
-      'SET_OPERATING_PROFILE': 'operatingProfile'
-    };
-
-    const field = stateMapping[command];
-    if (!field) return false;
-
-    const currentValue = latestData[field];
-    const newValue = Object.values(payload)[0];
-
-    if (currentValue !== undefined && currentValue === newValue) {
-      this.logger.warn(`[REDUNDANT] command ${command} is redundant. Device is already in state:  ${newValue}`);
-      return true;
-    }
-    return false;
-  }*/
- private findTelemetryField( mapping: any,  statePath: string): string | null {
-
+  private findTelemetryField( mapping: any,  statePath: string): string | null {
     for (const [field, config] of Object.entries<any>(mapping?.fields ?? {})) {
-
       if (config.path === statePath) {
         return field;
       }
     }
-
     return null;
   }
+
   private getLatestValue(latestData: any, field: string) {
+    const history = latestData?.[field];
 
-  const history = latestData?.[field];
+    if (!Array.isArray(history) ||  history.length === 0 ) {
+      return undefined;
+    }
 
-  if (!Array.isArray(history) ||  history.length === 0 ) {
-    return undefined;
+    return history[ history.length - 1 ][0];
   }
 
-  return history[ history.length - 1 ][0];
-}
+  private isCommandRedundant(device: any, latestData: any, command: string, payload: any): boolean {
+    if (command === "SET_STATE") {
+      const currentState = device.telemetryState;
+      const requestedState =   payload.state;
+      return currentState === requestedState;
+    }
 
- /* private isCommandRedundant(
-  latestData: any,
-  command: string,
-  payload: any
-): boolean {
-
-  if (!latestData) {
-    return false;
-  }
-
-  if (command === "SET_LED") {
-
-    const history = latestData.led;
-
-    if (
-      !Array.isArray(history) ||
-      history.length === 0
-    ) {
+    if (!latestData) {
       return false;
     }
 
-    const currentValue =
-      history[history.length - 1][0];
+    const commandDef = device.schema?.commands?.[command];
 
-    const requestedValue =
-      payload.value;
+    if (!commandDef) {
+      return false;
+    }
 
-    this.logger.debug(
-      `[REDUNDANCY] current=${currentValue} requested=${requestedValue}`
-    );
+    const statePath = commandDef["x-state-path"];
+    const payloadField = commandDef["x-payload-field"];
+
+    if (!statePath || !payloadField) {
+      return false;
+    }
+
+    const telemetryField = this.findTelemetryField( device.mapping, statePath);
+
+    if (!telemetryField) {
+      return false;
+    }
+
+    const currentValue = this.getLatestValue( latestData, telemetryField);
+    const requestedValue =  payload[payloadField];
+
+    this.logger.debug(`[REDUNDANCY] command=${command} current=${currentValue} requested=${requestedValue}`);
 
     if (currentValue === requestedValue) {
-      this.logger.warn(
-        `[REDUNDANT] SET_LED ignored`
-      );
-
+      this.logger.warn( `[REDUNDANT] ${command} ignored`);
       return true;
     }
 
     return false;
   }
-
-  return false;
-}*/
-private isCommandRedundant(device: any, latestData: any, command: string, payload: any): boolean {
-  if (command === "SET_STATE") {
-    const currentState = device.telemetryState;
-    const requestedState =   payload.state;
-    return currentState === requestedState;
-  }
-
-  if (!latestData) {
-    return false;
-  }
-
-  const commandDef = device.schema?.commands?.[command];
-
-  if (!commandDef) {
-    return false;
-  }
-
-  const statePath = commandDef["x-state-path"];
-
-  const payloadField = commandDef["x-payload-field"];
-
-  if (!statePath || !payloadField) {
-    return false;
-  }
-
-  const telemetryField = this.findTelemetryField( device.mapping, statePath);
-
-  if (!telemetryField) {
-    return false;
-  }
-
-  const currentValue = this.getLatestValue( latestData, telemetryField);
-
-  const requestedValue =  payload[payloadField];
-
-  this.logger.debug(`[REDUNDANCY] command=${command} current=${currentValue} requested=${requestedValue}`);
-
-  if (currentValue === requestedValue) {
-    this.logger.warn( `[REDUNDANT] ${command} ignored`);
-
-    return true;
-    }
-
-  return false;
-}
   
   async processTelemetry( message: unknown, context: TelemetryContext): Promise<{ approved: boolean; reason?: string }> {
 
@@ -311,42 +250,101 @@ private isCommandRedundant(device: any, latestData: any, command: string, payloa
 
     const deviceId = context.deviceId;
     this.logger.debug(`[START] Received telemetry for device : ${deviceId || "UNKNOWN"}`);
+    
     if (!deviceId) {
       return { approved: false, reason: "MISSING_DEVICE_IDENTIFIER"};
     }
 
-    const device = await this.loadDevice(deviceId);
+    try {
+      const device = await this.loadDevice(deviceId);
 
-    if (!device) {
-      return { approved: false, reason: "DEVICE_NOT_FOUND"};
+      if (!device) {
+        return { approved: false, reason: "DEVICE_NOT_FOUND"};
+      }
+
+      if (!device.model) {
+        this.logger.warn(`[DENIED] Device ${deviceId} has no assigned model version.`);
+        return { approved: false, reason: "MISSING_MODEL_VERSION"};
+      }
+
+      this.validateDeviceConfiguration(device, deviceId);
+      this.logger.debug(`[VALIDATION] Running AJV structure check for model version: ${device.model}:${device.version}`);
+
+      const validation = this.validateSchema( device, message);
+
+      if (!validation.valid) {
+        this.logger.warn(`[DENIED] Payload for device ${deviceId} failed JSON schema validation.`);
+        this.logger.warn(`[VALIDATION ERRORS]: ${JSON.stringify(validation.errors)}`);
+        return {approved: false, reason: "INVALID_TELEMETRY_SCHEMA"};
+      }
+      
+      this.logger.log(`[VALIDATION] Success! Payload structure is valid.`);
+      this.logger.debug(`[NORMALIZATION] Transforming device data using defined mapping rules.`);
+
+      const telemetry = this.normalizeTelemetry( message, deviceId, device.mapping );
+      this.logger.debug(`[NORMALIZATION] Transformation result: ${JSON.stringify(telemetry.data)}`);
+
+      this.logger.debug(`[SUCCESS] Forwarding normalized data to host application via onTelemetry hook...`);
+      await this.forwardTelemetry( telemetry, deviceId);
+      return {
+        approved: true,
+      };
+    } catch (error: any) {
+      this.logger.error(`[ERROR] processTelemetry failed for device ${deviceId}: ${error.message}`);
+
+      if (error instanceof DeviceNotFoundException) {
+        this.logger.warn(`[NOT_FOUND] Device ${deviceId} does not exist.`);
+        return { approved: false, reason: "DEVICE_NOT_FOUND" };
+      }
+
+      if (error instanceof DeviceOfflineException) {
+        this.logger.warn(`[OFFLINE] Device ${deviceId} is offline.`);
+        return { approved: false, reason: "DEVICE_OFFLINE" };
+      }
+
+      if (error instanceof DeviceUninitializedException) {
+        this.logger.warn(`[UNINITIALIZED] Device ${deviceId} is not initialized.`);
+        return { approved: false, reason: "DEVICE_UNINITIALIZED" };
+      }
+
+      if (error instanceof ConfigMissingException) {
+        this.logger.warn(`[CONFIG] Device ${deviceId} is missing configuration.`);
+        return { approved: false, reason: "CONFIG_MISSING" };
+      }
+
+      if (error instanceof ConfigMismatchException) {
+        this.logger.warn(`[CONFIG] Device ${deviceId} has config mismatch.`);
+        return { approved: false, reason: "CONFIG_MISMATCH" };
+      }
+
+      if (error instanceof NormalizationFailedException) {
+        this.logger.warn(`[NORMALIZATION] Device ${deviceId} normalization failed.`);
+        return { approved: false, reason: "NORMALIZATION_FAILED" };
+      }
+
+      if (error instanceof InvalidTimestampException) {
+        this.logger.warn(`[TIMESTAMP] Device ${deviceId} sent invalid timestamp.`);
+        throw error;
+      }
+
+      if (error instanceof SchemaCompileException) {
+        this.logger.error(`[SCHEMA] Device ${deviceId} schema compilation failed.`);
+        return { approved: false, reason: "SCHEMA_COMPILE_ERROR" };
+      }
+
+      if (error instanceof DatabaseFailureException) {
+        this.logger.error(`[DATABASE] Database failure for device ${deviceId}.`);
+        return { approved: false, reason: "DATABASE_FAILURE" };
+      }
+
+      if (error instanceof HookFailedException) {
+        this.logger.error(`[HOOK] onTelemetry hook failed for device ${deviceId}.`);
+        return { approved: false, reason: "HOOK_FAILED" };
+      }
+
+      this.logger.error(`[UNHANDLED] Unexpected error for device ${deviceId}: ${error.message}`);
+      return { approved: false, reason: "INTERNAL_ERROR" };
     }
-
-    if (!device.model) {
-      this.logger.warn(`[DENIED] Device ${deviceId} has no assigned model version.`);
-      return { approved: false, reason: "MISSING_MODEL_VERSION"};
-    }
-
-    this.validateDeviceConfiguration(device, deviceId);
-    this.logger.debug(`[VALIDATION] Running AJV structure check for model version: ${device.model}`);
-
-    const validation = this.validateSchema( device, message);
-
-    if (!validation.valid) {
-      this.logger.warn(`[DENIED] Payload for device ${deviceId} failed JSON schema validation.`);
-      this.logger.warn(`[VALIDATION ERRORS]: ${JSON.stringify(validation.errors)}`);
-      return {approved: false, reason: "INVALID_TELEMETRY_SCHEMA"};
-    }
-    this.logger.log(`[VALIDATION] Success! Payload structure is valid.`);
-    this.logger.debug(`[NORMALIZATION] Transforming device data using defined mapping rules.`);
-
-    const telemetry = this.normalizeTelemetry( message, deviceId, device.mapping );
-    this.logger.debug(`[NORMALIZATION] Transformation result: ${JSON.stringify(telemetry.data)}`);
-
-    this.logger.debug(`[SUCCESS] Forwarding normalized data to host application via onTelemetry hook...`);
-    await this.forwardTelemetry( telemetry, deviceId);
-    return {
-      approved: true,
-    };
   }
 
   async processStatus(statusPayload: unknown, context: TelemetryContext): Promise<void> {
@@ -356,7 +354,6 @@ private isCommandRedundant(device: any, latestData: any, command: string, payloa
      this.logger.warn("[STATUS] Device status rejected. Missing deviceId.");
       return;
     }
- 
 
     const statusObject = this.asRecord(statusPayload);
 
@@ -364,7 +361,6 @@ private isCommandRedundant(device: any, latestData: any, command: string, payloa
       this.logger.warn(`[STATUS] Device ${deviceId} sent an invalid status object.`);
       return;
     }
-
 
     const status = String(statusObject.status ?? "unknown");
     const timestamp =
@@ -387,12 +383,12 @@ private isCommandRedundant(device: any, latestData: any, command: string, payloa
           throw err;
         }
         throw new HookFailedException();
-
       }
     }
   }
 
   private commandLock = new Map<string, boolean>();
+  
   async triggerDeviceTelemetry(deviceId: string, state: 'ACTIVE' | 'IDLE') {
 
     this.logger.warn(
@@ -442,10 +438,9 @@ private isCommandRedundant(device: any, latestData: any, command: string, payloa
     }
   }
 
- async executeCommand( deviceId: string, command: string, payload: any ) {
+  async executeCommand( deviceId: string, command: string, payload: any ) {
     const device = await this.options.findDeviceById(deviceId);
 
-  
     this.validateDevice(device, deviceId);
     if (!device) {
      throw new DeviceNotFoundException(deviceId);
@@ -455,7 +450,6 @@ private isCommandRedundant(device: any, latestData: any, command: string, payloa
     }
     const latest = await this.options.getLatestTelemetry(deviceId);
     
-
     console.log(
       "LATEST TELEMETRY:",
       JSON.stringify(latest?.data, null, 2)
@@ -478,67 +472,96 @@ private isCommandRedundant(device: any, latestData: any, command: string, payloa
     }
 
     await this.options.sendCommand( deviceId, command, payload);
-}
-private extractFields( schema: any, prefix = "", required: string[] = []): any[] {
+  }
 
-  const result: any[] = [];
+  private extractFields( schema: any, prefix = "", required: string[] = []): any[] {
 
-  if (!schema?.properties) {
+    const result: any[] = [];
+
+    if (!schema?.properties) {
+      return result;
+    }
+
+    for (const [key, value] of Object.entries<any>(schema.properties)) {
+
+      const path = prefix ? `${prefix}.${key}`: key;
+
+      if (value.type === "object" && value.properties) {
+
+        result.push(
+          ...this.extractFields(value, path, value.required ?? [])
+        );
+
+        continue;
+      }
+
+     result.push({
+      name: key,
+      path,
+      type: value.type,
+      required: required.includes(key),
+      enum: value.enum,
+      minimum: value.minimum,
+      maximum: value.maximum,
+      default: value.default,
+      description: value.description
+    });
+    }
+
     return result;
   }
 
-  for (const [key, value] of Object.entries<any>(schema.properties)) {
+  async getCommandMetadata(deviceId: string) {
 
-    const path = prefix ? `${prefix}.${key}`: key;
-
-    if (value.type === "object" && value.properties) {
-
-      result.push(
-        ...this.extractFields(value, path, value.required ?? [])
-      );
-
-      continue;
+    const device = await this.options.findDeviceById(deviceId);
+    if (!device) {
+       throw new DeviceNotFoundException(deviceId);
     }
 
-   result.push({
-    name: key,
-    path,
-    type: value.type,
-    required: required.includes(key),
-    enum: value.enum,
-    minimum: value.minimum,
-    maximum: value.maximum,
-    default: value.default,
-    description: value.description
-  });
+    const commands = device.schema?.commands ?? {};
+
+    return Object.entries(commands).map(
+      ([commandName, commandDef]: any) => ({
+
+        command: commandName,
+
+        fields: this.extractFields(
+          commandDef.payload,
+          "",
+          commandDef.payload?.required ?? []
+        )
+      })
+    );
   }
 
-  return result;
-}
-async getCommandMetadata(deviceId: string) {
+  async invalidateDeviceCache(
+    deviceId: string,
+  ): Promise<void> {
+    const redisClient = this.options.redis;
 
-  const device = await this.options.findDeviceById(deviceId);
-  if (!device) {
-     throw new DeviceNotFoundException(deviceId);
+    if (!redisClient) {
+      this.logger.debug(
+        `[REDIS CACHE] Redis not configured. Nothing to invalidate for ${deviceId}`,
+      );
+      return;
+    }
+
+    try {
+      await redisClient.del(
+        `cache:device:${deviceId}`,
+      );
+
+      this.logger.log(
+        `[REDIS CACHE] Invalidated device profile for ${deviceId}`,
+      );
+    } catch (error: any) {
+      this.logger.error(
+        `[REDIS CACHE] Failed to invalidate device ${deviceId}: ${error.message}`,
+      );
+
+      throw error;
+    }
   }
-
-  const commands = device.schema?.commands ?? {};
-
-  return Object.entries(commands).map(
-    ([commandName, commandDef]: any) => ({
-
-      command: commandName,
-
-      fields: this.extractFields(
-        commandDef.payload,
-        "",
-        commandDef.payload?.required ?? []
-      )
-    })
-  );
-}
-
-
 
   async checkDevice(deviceId: string) {
     const device = await this.options.findDeviceById(deviceId);
