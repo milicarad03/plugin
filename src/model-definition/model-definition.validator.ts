@@ -5,7 +5,7 @@ export interface ModelDefinitionValidationResult {
   errors: string[];
 }
 
-function isRecord( value: unknown): value is Record<string, any> {
+function isRecord(value: unknown): value is Record<string, any> {
   return (
     typeof value === 'object' &&
     value !== null &&
@@ -16,16 +16,9 @@ function isRecord( value: unknown): value is Record<string, any> {
 /*
  * Proverava da li putanja iz mapper-a
  * postoji u JSON Schema definiciji.
- *
- * Primer:
- *
- * data.temp
- *
- * schema.properties.data
- *       .properties.temp
  */
-function resolveSchemaPath( schema: any, dottedPath: string,): boolean {
-  if (typeof dottedPath !== 'string' ||!dottedPath.trim()) {
+function resolveSchemaPath(schema: any, dottedPath: string): boolean {
+  if (typeof dottedPath !== 'string' || !dottedPath.trim()) {
     return false;
   }
 
@@ -34,27 +27,16 @@ function resolveSchemaPath( schema: any, dottedPath: string,): boolean {
   let current = schema;
 
   for (const segment of segments) {
-    /*
-     * Obično objektno polje.
-     */
-    if ( current?.properties?.[segment]) {
-      current = current.properties[segment ];
+    if (current?.properties?.[segment]) {
+      current = current.properties[segment];
       continue;
     }
 
-    /*
-     * Podrška ako se putanja
-     * nalazi unutar objekata
-     * koji su elementi niza.
-     */
-    if (current?.type === 'array' && current
-        ?.items
-        ?.properties
-        ?.[segment]
+    if (
+      current?.type === 'array' &&
+      current?.items?.properties?.[segment]
     ) {
-      current =
-        current.items .properties[segment];
-
+      current = current.items.properties[segment];
       continue;
     }
 
@@ -65,75 +47,38 @@ function resolveSchemaPath( schema: any, dottedPath: string,): boolean {
 }
 
 /*
- * Proverava naša custom
- * proširenja JSON Schema-e:
- *
- * x-reporting
- * x-buffering
- *
- * Ona se koriste kao metadata
- * za simulator/uređaj i ne
- * predstavljaju polja koja
- * moraju postojati u telemetriji.
+ * Proverava custom proširenja JSON Schema-e:
+ * x-reporting, x-buffering
  */
-function validateCustomKeywords( value: unknown, path: string, errors: string[]): void {
+function validateCustomKeywords(value: unknown, path: string, errors: string[]): void {
   if (Array.isArray(value)) {
-    value.forEach(
-      (item, index) => {
-        validateCustomKeywords(
-          item,
-          `${path}[${index}]`,
-          errors,
-        );
-      },
-    );
-
+    value.forEach((item, index) => {
+      validateCustomKeywords(item, `${path}[${index}]`, errors);
+    });
     return;
   }
 
   if (!isRecord(value)) return;
-  
 
   for (const [key, child] of Object.entries(value)) {
-    /*
-     * x-reporting format:
-     *
-     * "x-reporting": {
-     *   "ACTIVE": 6000,
-     *   "IDLE": 120000
-     * }
-     *
-     * ili:
-     *
-     * "IDLE": null
-     *
-     * null znači da se polje
-     * ne reportuje u tom stanju.
-     */
-    if ( key === 'x-reporting') {
+    if (key === 'x-reporting') {
       if (!isRecord(child)) {
-        errors.push( `X_REPORTING_INVALID: '${path}.${key}' must be an object`);
+        errors.push(`X_REPORTING_INVALID: '${path}.${key}' must be an object`);
       } else {
-        const allowedStates =
-          new Set([
-            'ACTIVE',
-            'IDLE',
-          ]);
-        if (
-          Object.keys( child).length === 0) {
+        const allowedStates = new Set(['ACTIVE', 'IDLE']);
+        if (Object.keys(child).length === 0) {
           errors.push(`X_REPORTING_EMPTY: '${path}.${key}'`);
         }
 
-        for ( const [ state, interval ] of Object.entries( child) ) {
-          /*
-           * Ne dozvoljavamo
-           * proizvoljna stanja.
-           */
-          if ( !allowedStates.has(state)) {
-            errors.push( `X_REPORTING_STATE_INVALID: '${path}.${key}.${state}'` );
+        for (const [state, interval] of Object.entries(child)) {
+          if (!allowedStates.has(state)) {
+            errors.push(`X_REPORTING_STATE_INVALID: '${path}.${key}.${state}'`);
             continue;
           }
-          if ( interval !== null && (typeof interval !== 'number' || !Number.isFinite( interval,  ) ||interval <= 0)) {
+          if (
+            interval !== null &&
+            (typeof interval !== 'number' || !Number.isFinite(interval) || interval <= 0)
+          ) {
             errors.push(
               `X_REPORTING_INTERVAL_INVALID: '${path}.${key}.${state}' must be a positive number or null`,
             );
@@ -142,26 +87,15 @@ function validateCustomKeywords( value: unknown, path: string, errors: string[])
       }
     }
 
-    /*
-     * x-buffering format:
-     *
-     * "x-buffering": {
-     *   "interval": 5000
-     * }
-     */
-    if ( key === 'x-buffering' ) {
+    if (key === 'x-buffering') {
       if (!isRecord(child)) {
-        errors.push( `X_BUFFERING_INVALID: '${path}.${key}' must be an object`);
+        errors.push(`X_BUFFERING_INVALID: '${path}.${key}' must be an object`);
       } else {
-        const interval =
-          child.interval;
+        const interval = child.interval;
 
         if (
-          typeof interval !==
-            'number' ||
-          !Number.isFinite(
-            interval,
-          ) ||
+          typeof interval !== 'number' ||
+          !Number.isFinite(interval) ||
           interval <= 0
         ) {
           errors.push(
@@ -169,40 +103,15 @@ function validateCustomKeywords( value: unknown, path: string, errors: string[])
           );
         }
 
-        /*
-         * Za sada x-buffering
-         * dozvoljava samo interval.
-         *
-         * Time hvatamo typo ili
-         * pogrešnu konfiguraciju.
-         */
-        for (
-          const childKey
-          of Object.keys(
-            child,
-          )
-        ) {
-          if (
-            childKey !==
-            'interval'
-          ) {
-            errors.push(
-              `X_BUFFERING_PROPERTY_INVALID: '${path}.${key}.${childKey}'`,
-            );
+        for (const childKey of Object.keys(child)) {
+          if (childKey !== 'interval') {
+            errors.push(`X_BUFFERING_PROPERTY_INVALID: '${path}.${key}.${childKey}'`);
           }
         }
       }
     }
 
-    /*
-     * Nastavljamo rekurzivno
-     * kroz celu JSON Schema-u.
-     */
-    validateCustomKeywords(
-      child,
-      `${path}.${key}`,
-      errors,
-    );
+    validateCustomKeywords(child, `${path}.${key}`, errors);
   }
 }
 
@@ -213,281 +122,111 @@ export function validateModelDefinition(
 ): ModelDefinitionValidationResult {
   const errors: string[] = [];
 
-  /*
-   * 1. Schema mora biti
-   * JSON objekat.
-   */
+  /* 1. Schema mora biti JSON objekat */
   if (!isRecord(schema)) {
     return {
       valid: false,
-      errors: [
-        'SCHEMA_MUST_BE_JSON_OBJECT',
-      ],
+      errors: ['SCHEMA_MUST_BE_JSON_OBJECT'],
     };
   }
 
-  /*
-   * Mapper mora biti
-   * JSON objekat.
-   */
+  /* Mapper mora biti JSON objekat */
   if (!isRecord(mapping)) {
     return {
       valid: false,
-      errors: [
-        'MAPPING_MUST_BE_JSON_OBJECT',
-      ],
+      errors: ['MAPPING_MUST_BE_JSON_OBJECT'],
     };
   }
 
-  /*
-   * 2. JSON Schema mora moći
-   * da se kompajlira.
-   *
-   * Ne koristimo strict:false.
-   *
-   * Eksplicitno dozvoljavamo
-   * samo custom keyword-e koje
-   * naš sistem poznaje.
-   */
+  /* 2. JSON Schema kompilacija preko AJV */
   try {
-    const ajv =
-      new Ajv2020({
-        allErrors: true,
-      });
+    const ajv = new Ajv2020({ allErrors: true });
 
-    ajv.addKeyword(
-      'commands',
-    );
+    ajv.addKeyword('commands');
+    ajv.addKeyword('x-reporting');
+    ajv.addKeyword('x-buffering');
 
-    ajv.addKeyword(
-      'x-reporting',
-    );
-
-    ajv.addKeyword(
-      'x-buffering',
-    );
-
-    ajv.compile(
-      schema,
-    );
-  } catch (
-    error: any
-  ) {
+    ajv.compile(schema);
+  } catch (error: any) {
     errors.push(
-      `INVALID_JSON_SCHEMA: ${
-        error?.message ??
-        'Schema compilation failed'
-      }`,
+      `INVALID_JSON_SCHEMA: ${error?.message ?? 'Schema compilation failed'}`,
     );
   }
 
-  /*
-   * 3. Provera custom
-   * metadata keyword-a.
-   *
-   * Ovo proverava sadržaj:
-   *
-   * x-reporting
-   * x-buffering
-   */
-  validateCustomKeywords(
-    schema,
-    'schema',
-    errors,
-  );
+  /* 3. Provera custom metadata keyword-a */
+  validateCustomKeywords(schema, 'schema', errors);
 
-  /*
-   * 4. schemaId mora
-   * odgovarati modelu
-   * za koji se vrši upload.
-   *
-   * Primer:
-   *
-   * expectedModelId = modelB
-   *
-   * schema:
-   *
-   * "schemaId": {
-   *   "type": "string",
-   *   "const": "modelB"
-   * }
-   */
-  const schemaId =
-    schema
-      ?.properties
-      ?.schemaId
-      ?.const;
+  /* 4. schemaId provera odgovarajućeg modela */
+  const schemaId = schema?.properties?.schemaId?.const;
 
-  if (
-    typeof schemaId !==
-    'string'
-  ) {
-    errors.push(
-      'SCHEMA_ID_CONST_MISSING',
-    );
-  } else if (
-    schemaId !==
-    expectedModelId
-  ) {
+  if (typeof schemaId !== 'string') {
+    errors.push('SCHEMA_ID_CONST_MISSING');
+  } else if (schemaId !== expectedModelId) {
     errors.push(
       `SCHEMA_MODEL_MISMATCH: expected '${expectedModelId}', got '${schemaId}'`,
     );
   }
 
-  /*
-   * 5. schemaId mora
-   * biti obavezan u svakoj
-   * telemetry poruci.
-   *
-   * Schema zato mora imati:
-   *
-   * "required": [
-   *   "schemaId"
-   * ]
-   */
-  const rootRequired =
-    Array.isArray(
-      schema.required,
-    )
-      ? schema.required
-      : [];
+  /* 5. schemaId mora biti obavezno polje */
+  const rootRequired = Array.isArray(schema.required) ? schema.required : [];
 
-  if (
-    !rootRequired.includes(
-      'schemaId',
-    )
-  ) {
-    errors.push(
-      'SCHEMA_ID_MUST_BE_REQUIRED',
-    );
+  if (!rootRequired.includes('schemaId')) {
+    errors.push('SCHEMA_ID_MUST_BE_REQUIRED');
   }
 
-  /*
-   * 6. Mapper mora
-   * imati fields.
-   */
-  if (
-    !isRecord(
-      mapping.fields,
-    ) ||
-    Object.keys(
-      mapping.fields,
-    ).length === 0
-  ) {
-    errors.push(
-      'MAPPING_FIELDS_MISSING',
-    );
+  /* 6. Mapper mora imati validna polja */
+  if (!isRecord(mapping.fields) || Object.keys(mapping.fields).length === 0) {
+    errors.push('MAPPING_FIELDS_MISSING');
 
     return {
-      valid:
-        errors.length === 0,
-
+      valid: errors.length === 0,
       errors,
     };
   }
 
-  /*
-   * 7. Svaki mapper path
-   * mora postojati u schema.
-   *
-   * Primer:
-   *
-   * "temperature": {
-   *   "path": "data.temp"
-   * }
-   *
-   * mora odgovarati:
-   *
-   * properties.data
-   *   .properties.temp
-   */
-  for (
-    const [
-      targetKey,
-      definition,
-    ]
-    of Object.entries(
-      mapping.fields,
-    )
-  ) {
-    if (
-      !isRecord(
-        definition,
-      )
-    ) {
-      errors.push(
-        `MAPPING_FIELD_INVALID: '${targetKey}'`,
-      );
-
+  /* 7. Provera svake putanje i dodate operation provere */
+  for (const [targetKey, definition] of Object.entries(mapping.fields)) {
+    if (!isRecord(definition)) {
+      errors.push(`MAPPING_FIELD_INVALID: '${targetKey}'`);
       continue;
     }
 
-    const path =
-      definition.path;
+    const path = definition.path;
 
-    if (
-      typeof path !==
-        'string' ||
-      !path.trim()
-    ) {
-      errors.push(
-        `MAPPING_PATH_MISSING: '${targetKey}'`,
-      );
-
+    if (typeof path !== 'string' || !path.trim()) {
+      errors.push(`MAPPING_PATH_MISSING: '${targetKey}'`);
       continue;
     }
 
-    if (
-      !resolveSchemaPath(
-        schema,
-        path,
-      )
-    ) {
-      errors.push(
-        `MAPPING_PATH_NOT_IN_SCHEMA: '${targetKey}' -> '${path}'`,
-      );
+    if (!resolveSchemaPath(schema, path)) {
+      errors.push(`MAPPING_PATH_NOT_IN_SCHEMA: '${targetKey}' -> '${path}'`);
     }
 
-    /*
-     * historyPath nije
-     * obavezan.
-     *
-     * Ali ako postoji,
-     * mora biti validna
-     * putanja kroz schema.
-     */
-    const historyPath =
-      definition.historyPath;
+    /* Validacija opcionalnog historyPath-a */
+    const historyPath = definition.historyPath;
 
-    if (
-      historyPath !==
-      undefined
-    ) {
-      if (
-        typeof historyPath !==
-          'string' ||
-        !historyPath.trim()
-      ) {
+    if (historyPath !== undefined) {
+      if (typeof historyPath !== 'string' || !historyPath.trim()) {
+        errors.push(`HISTORY_PATH_INVALID: '${targetKey}'`);
+      } else if (!resolveSchemaPath(schema, historyPath)) {
+        errors.push(`HISTORY_PATH_NOT_IN_SCHEMA: '${targetKey}' -> '${historyPath}'`);
+      }
+    }
+
+    /* Validacija opcionalnog operation polja (array, min, max) */
+    const operation = definition.operation;
+    if (operation !== undefined) {
+      const allowedOperations = new Set(['array', 'min', 'max']);
+      if (typeof operation !== 'string' || !allowedOperations.has(operation)) {
         errors.push(
-          `HISTORY_PATH_INVALID: '${targetKey}'`,
-        );
-      } else if (
-        !resolveSchemaPath(
-          schema,
-          historyPath,
-        )
-      ) {
-        errors.push(
-          `HISTORY_PATH_NOT_IN_SCHEMA: '${targetKey}' -> '${historyPath}'`,
+          `MAPPING_OPERATION_INVALID: '${targetKey}' has invalid operation '${operation}'`,
         );
       }
     }
   }
 
   return {
-    valid:
-      errors.length === 0,
-
+    valid: errors.length === 0,
     errors,
   };
 }

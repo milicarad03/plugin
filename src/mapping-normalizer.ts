@@ -1,94 +1,138 @@
-import { Logger } from "@nestjs/common";
-//const logger = new Logger("MappingNormalizer");
 import { ConfigMissingException } from "./exceptions/plugin.exceptions";
-class PluginLogger extends Logger {
-  override debug(message: string) {
-    if (process.env.LOG_LEVEL === 'debug') {
-      super.debug(message);
-    }
-  }
+
+export interface MappingFieldDefinition {
+  path: string;
+  historyPath?: string;
+  operation?: 'array' | 'min' | 'max';
 }
-export const logger = new PluginLogger("MappingNormalizer");
-export type MappingDefinition = {
-  fields: Record<string,{
-    path: string;
-    historyPath?: string;
-  }>;
+
+export interface MappingDefinition {
+  fields: Record<string, MappingFieldDefinition>;
+}
+
+export interface NormalizedData {
+  deviceId: string;
+  timestamp: string;
+  data: Record<string, any>;
+  raw: any;
+}
+
+export const logger = {
+  warn: (msg: string) => console.warn(msg),
+  debug: (msg: string) => console.debug(msg),
 };
 
-
-function getValueByPath(obj: any, path: string) {
-  if (typeof path !== 'string') {
+/*
+ * Pomoćna funkcija za bezbedno izvlačenje vrednosti iz objekta po dotted path-u
+ */
+function getValueByPath(obj: any, path: string): any {
+  if (!obj || typeof path !== 'string' || !path.trim()) {
     return undefined;
   }
-  return path.split(".").reduce((acc, key) => {
-    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+
+  const segments = path.split('.').filter(Boolean);
+  let current = obj;
+
+  for (const segment of segments) {
+    if (
+      segment === 'prototype' ||
+      segment === 'constructor' ||
+      segment === '__proto__'
+    ) {
       return undefined;
     }
-    if (acc === undefined || acc === null) {
+
+    if (current === null || current === undefined) {
       return undefined;
     }
-    return acc[key];
-  }, obj);
+
+    current = current[segment];
+  }
+
+  return current;
 }
 
+/*
+ * Pomoćna funkcija za izvlačenje čisto numeričkih vrednosti iz niza.
+ * Rukuje i sa obično numeričkim nizovima [1, 2] i sa tuple nizovima [[val, timestamp], ...]
+ */
+function extractNumericValues(arr: unknown[]): number[] {
+  return arr
+    .filter((item) => item !== null && item !== undefined && item !== '')
+    .map((item) => {
+      // Ako je item ugnježdeni niz [value, timestamp], uzmi prvi element
+      if (Array.isArray(item)) {
+        return item.length > 0 ? Number(item[0]) : NaN;
+      }
+      return Number(item);
+    })
+    .filter((num) => !Number.isNaN(num));
+}
 
 export function normalizeWithMapping(
-  message: unknown,
+  message: any,
   deviceId: string,
-  mapping: MappingDefinition
-) {
-  if (!message || typeof message !== "object") {
-    logger.warn(`[MAPPER] Normalization aborted for device ${deviceId}: Message is not a valid object.`);
+  mapping: MappingDefinition,
+): NormalizedData | null {
+  if (!mapping || !mapping.fields) {
+    logger.warn(`[MAPPER] Normalization aborted for device ${deviceId}: Invalid mapping definition.`);
+    throw new ConfigMissingException();
+  }
+
+  if (!message || typeof message !== 'object') {
+    logger.warn(`[MAPPER] Normalization aborted for device ${deviceId}: Invalid message payload.`);
     return null;
   }
 
-  if (!mapping || !mapping.fields) {
-    logger.warn(`[MAPPER] Normalization aborted for device ${deviceId}: Invalid mapping definition.`);
-   throw new ConfigMissingException();
- 
-  }
+  const data: Record<string, any> = {};
 
-  const data: Record<string, unknown> = {};
-  logger.debug(`[MAPPER] Starting data extraction for device: ${deviceId}`);
+  for (const [targetKey, fieldDef] of Object.entries(mapping.fields)) {
+    if (!fieldDef || typeof fieldDef.path !== 'string') {
+      continue;
+    }
 
-  for (const targetKey of Object.keys(mapping.fields)) {
-    const { path, historyPath} = mapping.fields[targetKey];
+    const rawVal = getValueByPath(message, fieldDef.path);
 
-    const value = getValueByPath(message, path);
-     if (value !== undefined) {
-        data[targetKey] = value;
+    if (rawVal === undefined) {
+      continue;
+    }
 
-        logger.debug( `[MAPPER] Extracted "${targetKey}" from "${path}" => ${JSON.stringify(value)}`);
-      }else {
-        logger.debug(`[MAPPER] Missing field in payload: Path "${path}" for target key "${targetKey}" resolved to undefined.`);
+    const operation = fieldDef.operation;
 
-        }
-      if (historyPath) {
-
-      const historyValue = getValueByPath(message, historyPath);
-      if (historyValue !== undefined) {
-        const historical = (data.historicalTelemetry ?? {}) as Record<string, unknown>;
-
-        historical[targetKey] = historyValue;
-
-        data.historicalTelemetry =  historical;
-
-        logger.debug(`[MAPPER] Extracted history "${targetKey}" from "${historyPath}"`);
+    if (operation === 'min' || operation === 'max') {
+      if (!Array.isArray(rawVal)) {
+        continue;
       }
-  
-     // data[targetKey] = value;
-     //logger.debug(`[MAPPER] Extracted: "${targetKey}" from path "${path}" -> Value: ${JSON.stringify(data[targetKey])}`);
-    // logger.debug(`[MAPPER] Extracted: "${targetKey}" from path "${path}" -> Value: ${JSON.stringify(value)}`);
+
+      const numericValues =
+        extractNumericValues(rawVal);
+
+      if (numericValues.length > 0) {
+        data[targetKey] =
+          operation === 'min'
+            ? Math.min(...numericValues)
+            : Math.max(...numericValues);
+      }
+
+      continue;
+    } else if (operation === 'array') {
+        if (Array.isArray(rawVal)) {
+          data[targetKey] = rawVal;
+        }
+    } else {
+      // Podrazumevano ponašanje (vraca ceo objekat/niz/primitivu)
+      data[targetKey] = rawVal;
     }
   }
-  logger.debug(`[MAPPER OUTPUT] ${JSON.stringify(data, null, 2)}`);
-  
+  console.log(
+  'MAPPING RESULT',
+  JSON.stringify(data, null, 2),
+);
 
   return {
     deviceId,
     timestamp: new Date().toISOString(),
     data,
-    raw: message
+    raw: message,
   };
 }
