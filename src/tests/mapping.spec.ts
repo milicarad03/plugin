@@ -393,5 +393,292 @@ describe('Mapping Normalizer', () => {
       expect(result!.data.minPower).toBe(45.2);
       expect(result!.data.maxPower).toBe(210.0);
     });
+    it('should not expose raw history keys', () => {
+      const mapping = {
+        fields: {
+          powerDraw: {
+            path: 'performance.electrical.kw',
+            historyPath: 'historicalTelemetry.kw',
+          },
+        },
+      };
+
+      const message = {
+        historicalTelemetry: {
+          kw: [[100, '2026']],
+        },
+      };
+
+      const result = normalizeWithMapping(
+        message,
+        'device1',
+        mapping,
+      );
+
+      expect(
+        result!.data.historicalTelemetry.kw,
+      ).toBeUndefined();
+    });
+    it('should map multiple history fields', () => {
+  const mapping = {
+    fields: {
+      powerDraw: {
+        path: 'x',
+        historyPath: 'historicalTelemetry.kw',
+      },
+      pressStage1: {
+        path: 'y',
+        historyPath: 'historicalTelemetry.p1',
+      },
+    },
+  };
+
+  const message = {
+    historicalTelemetry: {
+      kw: [[100, 'a']],
+      p1: [[5, 'b']],
+    },
+  };
+
+  const result = normalizeWithMapping(
+    message,
+    'device1',
+    mapping,
+  );
+
+  expect(
+    result!.data.historicalTelemetry.powerDraw,
+  ).toEqual([[100, 'a']]);
+
+  expect(
+    result!.data.historicalTelemetry.pressStage1,
+  ).toEqual([[5, 'b']]);
+});
+it('should map historyPath fields into normalized historicalTelemetry', () => {
+  const mapping = {
+    fields: {
+      powerDraw: {
+        path: 'performance.electrical.kw',
+        historyPath: 'historicalTelemetry.kw',
+      },
+    },
+  };
+
+  const message = {
+    historicalTelemetry: {
+      kw: [
+        [100, '2026-01-01T10:00:00Z'],
+        [200, '2026-01-01T10:01:00Z'],
+      ],
+    },
+  };
+
+  const result = normalizeWithMapping(
+    message,
+    'device1',
+    mapping,
+  );
+
+  expect(
+    result!.data.historicalTelemetry.powerDraw,
+  ).toEqual([
+    [100, '2026-01-01T10:00:00Z'],
+    [200, '2026-01-01T10:01:00Z'],
+  ]);
+});
+it('should ignore missing historyPath values', () => {
+  const mapping = {
+    fields: {
+      powerDraw: {
+        path: 'performance.kw',
+        historyPath: 'historicalTelemetry.kw',
+      },
+    },
+  };
+
+  const result = normalizeWithMapping(
+    {},
+    'device1',
+    mapping,
+  );
+
+  expect(
+    result!.data.historicalTelemetry,
+  ).toBeUndefined();
+});
+it('should map kw history to powerDraw history', () => {
+    const mapping = {
+      fields: {
+        powerDraw: {
+          path: 'performance.electrical.kw',
+          historyPath: 'historicalTelemetry.kw',
+        },
+      },
+    };
+
+    const message = {
+      historicalTelemetry: {
+        kw: [
+          [124.9, '2026-08-19T11:29:18.561Z'],
+          [179.2, '2026-08-19T11:29:38.580Z'],
+        ],
+      },
+    };
+
+    const result = normalizeWithMapping(
+      message,
+      'device1',
+      mapping,
+    );
+
+    expect(
+      result!.data.historicalTelemetry.powerDraw,
+    ).toHaveLength(2);
   });
+
+  it('should not create empty historicalTelemetry object', () => {
+  const mapping = {
+    fields: {
+      powerDraw: {
+        path: 'performance.electrical.kw',
+        historyPath: 'historicalTelemetry.kw',
+      },
+    },
+  };
+
+  const result = normalizeWithMapping(
+    {},
+    'device1',
+    mapping,
+  );
+
+  expect(
+    result!.data.historicalTelemetry,
+  ).toBeUndefined();
+});
+it('should map history even when current path value does not exist', () => {
+  const mapping = {
+    fields: {
+      powerDraw: {
+        path: 'performance.electrical.kw',
+        historyPath: 'historicalTelemetry.kw',
+      },
+    },
+  };
+
+  const message = {
+    historicalTelemetry: {
+      kw: [[100, '2026']],
+    },
+  };
+
+  const result = normalizeWithMapping(
+    message,
+    'device1',
+    mapping,
+  );
+
+  expect(
+    result!.data.historicalTelemetry.powerDraw,
+  ).toEqual([[100, '2026']]);
+});
+it('should aggregate all mapped history fields into one historicalTelemetry object', () => {
+  const mapping = {
+    fields: {
+      powerDraw: {
+        path: 'x',
+        historyPath: 'historicalTelemetry.kw',
+      },
+      airflow: {
+        path: 'y',
+        historyPath: 'historicalTelemetry.flow',
+      },
+      powerFactor: {
+        path: 'z',
+        historyPath: 'historicalTelemetry.pf',
+      },
+    },
+  };
+
+  const message = {
+    historicalTelemetry: {
+      kw: [[100, 'a']],
+      flow: [[20, 'b']],
+      pf: [[0.9, 'c']],
+    },
+  };
+
+  const result = normalizeWithMapping(
+    message,
+    'device1',
+    mapping,
+  );
+
+  expect(
+    result!.data.historicalTelemetry,
+  ).toEqual({
+    powerDraw: [[100, 'a']],
+    airflow: [[20, 'b']],
+    powerFactor: [[0.9, 'c']],
+  });
+});
+it('should aggregate multiple history mappings', () => {
+  const mapping = {
+    fields: {
+      powerDraw: {
+        path: 'x',
+        historyPath: 'historicalTelemetry.kw',
+      },
+      airflow: {
+        path: 'y',
+        historyPath: 'historicalTelemetry.flow',
+      },
+    },
+  };
+
+  const result = normalizeWithMapping(
+    {
+      historicalTelemetry: {
+        kw: [[100, 'a']],
+        flow: [[20, 'b']],
+      },
+    },
+    'device1',
+    mapping,
+  );
+
+  expect(
+    result!.data.historicalTelemetry,
+  ).toEqual({
+    powerDraw: [[100, 'a']],
+    airflow: [[20, 'b']],
+  });
+});
+it('should map history even when current value is missing', () => {
+  const mapping = {
+    fields: {
+      powerDraw: {
+        path: 'performance.electrical.kw',
+        historyPath: 'historicalTelemetry.kw',
+      },
+    },
+  };
+
+  const result = normalizeWithMapping(
+    {
+      historicalTelemetry: {
+        kw: [[100, '2026']],
+      },
+    },
+    'device1',
+    mapping,
+  );
+
+  expect(
+    result!.data.historicalTelemetry.powerDraw,
+  ).toEqual([[100, '2026']]);
+});
+
+  });
+  
 });

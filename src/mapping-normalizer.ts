@@ -124,10 +124,28 @@ export function normalizeWithMapping(
       data[targetKey] = rawVal;
     }
   }
-  console.log(
-  'MAPPING RESULT',
-  JSON.stringify(data, null, 2),
-);
+
+
+  const mappedHistory: Record<string, any> = {};
+
+for (const [targetKey, fieldDef] of Object.entries(mapping.fields)) {
+  if (!fieldDef.historyPath) {
+    continue;
+  }
+
+  const historyValue = getValueByPath(
+    message,
+    fieldDef.historyPath,
+  );
+
+  if (historyValue !== undefined) {
+    mappedHistory[targetKey] = historyValue;
+  }
+}
+
+if (Object.keys(mappedHistory).length > 0) {
+  data.historicalTelemetry = mappedHistory;
+}
 
   return {
     deviceId,
