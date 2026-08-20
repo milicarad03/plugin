@@ -13,10 +13,6 @@ function isRecord(value: unknown): value is Record<string, any> {
   );
 }
 
-/*
- * Proverava da li putanja iz mapper-a
- * postoji u JSON Schema definiciji.
- */
 function resolveSchemaPath(schema: any, dottedPath: string): boolean {
   if (typeof dottedPath !== 'string' || !dottedPath.trim()) {
     return false;
@@ -46,10 +42,6 @@ function resolveSchemaPath(schema: any, dottedPath: string): boolean {
   return true;
 }
 
-/*
- * Proverava custom proširenja JSON Schema-e:
- * x-reporting, x-buffering
- */
 function validateCustomKeywords(value: unknown, path: string, errors: string[]): void {
   if (Array.isArray(value)) {
     value.forEach((item, index) => {
@@ -122,7 +114,6 @@ export function validateModelDefinition(
 ): ModelDefinitionValidationResult {
   const errors: string[] = [];
 
-  /* 1. Schema mora biti JSON objekat */
   if (!isRecord(schema)) {
     return {
       valid: false,
@@ -130,7 +121,6 @@ export function validateModelDefinition(
     };
   }
 
-  /* Mapper mora biti JSON objekat */
   if (!isRecord(mapping)) {
     return {
       valid: false,
@@ -138,7 +128,6 @@ export function validateModelDefinition(
     };
   }
 
-  /* 2. JSON Schema kompilacija preko AJV */
   try {
     const ajv = new Ajv2020({ allErrors: true });
 
@@ -153,10 +142,8 @@ export function validateModelDefinition(
     );
   }
 
-  /* 3. Provera custom metadata keyword-a */
   validateCustomKeywords(schema, 'schema', errors);
 
-  /* 4. schemaId provera odgovarajućeg modela */
   const schemaId = schema?.properties?.schemaId?.const;
 
   if (typeof schemaId !== 'string') {
@@ -167,14 +154,12 @@ export function validateModelDefinition(
     );
   }
 
-  /* 5. schemaId mora biti obavezno polje */
   const rootRequired = Array.isArray(schema.required) ? schema.required : [];
 
   if (!rootRequired.includes('schemaId')) {
     errors.push('SCHEMA_ID_MUST_BE_REQUIRED');
   }
 
-  /* 6. Mapper mora imati validna polja */
   if (!isRecord(mapping.fields) || Object.keys(mapping.fields).length === 0) {
     errors.push('MAPPING_FIELDS_MISSING');
 
@@ -184,7 +169,6 @@ export function validateModelDefinition(
     };
   }
 
-  /* 7. Provera svake putanje i dodate operation provere */
   for (const [targetKey, definition] of Object.entries(mapping.fields)) {
     if (!isRecord(definition)) {
       errors.push(`MAPPING_FIELD_INVALID: '${targetKey}'`);
@@ -202,7 +186,6 @@ export function validateModelDefinition(
       errors.push(`MAPPING_PATH_NOT_IN_SCHEMA: '${targetKey}' -> '${path}'`);
     }
 
-    /* Validacija opcionalnog historyPath-a */
     const historyPath = definition.historyPath;
 
     if (historyPath !== undefined) {
@@ -213,7 +196,6 @@ export function validateModelDefinition(
       }
     }
 
-    /* Validacija opcionalnog operation polja (array, min, max) */
     const operation = definition.operation;
     if (operation !== undefined) {
       const allowedOperations = new Set(['array', 'min', 'max']);
