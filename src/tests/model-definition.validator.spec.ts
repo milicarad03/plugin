@@ -175,6 +175,8 @@ describe('validateModelDefinition', () => {
           historyPath: 'invalid.history.path',
           operation: 'invalidOp',
         },
+        invalidDefinition: 'not-an-object' as any,
+        emptyPath: { path: '' },
       },
     };
 
@@ -188,5 +190,7 @@ describe('validateModelDefinition', () => {
     expect(resultBadPaths.errors).toContain(
       "MAPPING_OPERATION_INVALID: 'testField' has invalid operation 'invalidOp'",
     );
+    expect(resultBadPaths.errors).toContain("MAPPING_FIELD_INVALID: 'invalidDefinition'");
+    expect(resultBadPaths.errors).toContain("MAPPING_PATH_MISSING: 'emptyPath'");
   });
 });

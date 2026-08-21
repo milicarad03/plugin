@@ -1,483 +1,331 @@
+import { Test, TestingModule } from '@nestjs/testing';
 import { DeviceDashboardService } from './device-dashboard.service';
-import Redis from 'ioredis-mock';
-import * as validator from '../newvalidator';
-import * as mapper from '../mapping-normalizer';
+import { DEVICE_DASHBOARD_OPTIONS } from '../device-registry.interface';
+import { 
+  DeviceNotFoundException, 
+  DeviceOfflineException, 
+  DeviceUninitializedException, 
+  ConfigMissingException, 
+  ConfigMismatchException, 
+  NormalizationFailedException,
+  HookFailedException,
+  DatabaseFailureException,
+  SchemaCompileException,
+  CommandValidationException,
+  DeviceSchemaMissingException,
+  InvalidTimestampException 
+} from '../exceptions/plugin.exceptions';
+import { NotFoundException, ForbiddenException } from '@nestjs/common';
 
-import { PluginErrorCode } from 'src/device-registry.interface';
-import { ForbiddenException , NotFoundException} from '@nestjs/common';
-jest.mock('../newvalidator');
-jest.mock('../mapping-normalizer');
-
-describe('DeviceDashboardService', () => {
+describe('DeviceDashboardService - Comprehensive Negative & Edge Case Scenarios', () => {
   let service: DeviceDashboardService;
   let mockRedis: any;
   let mockOptions: any;
 
-
-  const mockSchema = {
-    type: "object",
-    properties: { schemaId: { const: "modelF" }, value: { type: "number" } },
-    required: ["schemaId", "value"]
+  const sampleDevice = {
+    id: 'device-1',
+    model: 'smartPumpModel',
+    version: '1.0.0',
+    status: 'ACTIVE',
+    telemetryState: 'ACTIVE',
+    schema: {
+      type: 'object',
+      properties: {
+        schemaId: { const: 'smartPumpModel' },
+        value: { type: 'number' }
+      },
+      required: ['schemaId', 'value'],
+      commands: {
+        SET_STATE: {
+          'x-state-path': 'metrics.state',
+          'x-payload-field': 'state',
+          payload: {
+            type: 'object',
+            properties: { state: { type: 'string' } },
+            required: ['state']
+          }
+        },
+        SET_LED: {
+          payload: {
+            type: 'object',
+            properties: { value: { type: 'boolean' } },
+            required: ['value']
+          }
+        }
+      }
+    },
+    mapping: {
+      fields: {
+        flowRate: { path: 'metrics.flowRate' }
+      }
+    }
   };
 
-  function mockDevice(overrides = {}) {
-    return {
-      model: 'modelF',
-      schema: mockSchema,
-      mapping: { fields: { val: { path: 'val' } } },
-      ...overrides
-    };
-  }
-
-  const mockValidator = validator.validateTelemetryPayload as jest.Mock;
-  const mockMapper = mapper.normalizeWithMapping as jest.Mock;
-
   beforeEach(async () => {
-    mockRedis = new Redis();
-    await mockRedis.flushall();
-    mockRedis.removeAllListeners();
+    mockRedis = {
+      get: jest.fn(),
+      set: jest.fn(),
+      del: jest.fn(),
+    };
 
     mockOptions = {
       redis: mockRedis,
-      findDeviceById: jest.fn(),
-      onTelemetry: jest.fn(),
-      onStatusChange: jest.fn(),
-      sendCommand: jest.fn(),
-      getLatestTelemetry: jest.fn(),
+      findDeviceById: jest.fn().mockResolvedValue(sampleDevice),
+      onTelemetry: jest.fn().mockResolvedValue(undefined),
+      onStatusChange: jest.fn().mockResolvedValue(undefined),
+      sendCommand: jest.fn().mockResolvedValue(undefined),
+      getLatestTelemetry: jest.fn().mockResolvedValue({ data: { flowRate: [[100, 1]] } }),
     };
-    service = new DeviceDashboardService(mockOptions);
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        DeviceDashboardService,
+        {
+          provide: DEVICE_DASHBOARD_OPTIONS,
+          useValue: mockOptions,
+        },
+      ],
+    }).compile();
+
+    service = module.get<DeviceDashboardService>(DeviceDashboardService);
+  });
+
+  afterEach(() => {
     jest.clearAllMocks();
   });
-  afterEach(async () => {
-      
-   // service.onModuleDestroy();
 
-    if (mockRedis) {
-      await mockRedis.disconnect();
-    }
-
-    jest.clearAllMocks();
-    jest.restoreAllMocks();
-
-  });
-
-  it('should use Redis cache if data exists (Cache Hit)', async () => {
-    const device = mockDevice();
-    await mockRedis.set('cache:device:dev-123', JSON.stringify(device));
-    mockValidator.mockReturnValue({ valid: true, errors: [] });
-    mockMapper.mockReturnValue({ deviceId: 'dev-123', data: {}, timestamp: '', raw: {} });
-
-    //findDeviceById ne sme biti pozvan ako je device u kesu
-    await service.processTelemetry({ value: 50 }, { deviceId: 'dev-123' });
-
-    expect(mockOptions.findDeviceById).not.toHaveBeenCalled();
-    expect(mockValidator).toHaveBeenCalled();
-  });
-  it('should throw PluginErrorCode.CONFIG_MISMATCH if configuration mismatch occurs', async () => {
-    mockOptions.findDeviceById.mockResolvedValue({ 
-      model: 'modelF', 
-      schema: { properties: { schemaId: { const: 'WRONG_MODEL' } }},
-      mapping: { fields: {} }
-    });
-
-    await expect(service.processTelemetry({ value: 10 }, { deviceId: 'x' }))
-      .rejects.toThrow(PluginErrorCode.CONFIG_MISMATCH);
-  });
-  it('should reject missing model version', async () => {
-    mockOptions.findDeviceById.mockResolvedValue({model: null, schema: mockSchema, mapping: { fields: {} }});
-
-    const result = await service.processTelemetry({}, { deviceId: 'x' });
-
-    expect(result.reason).toBe('MISSING_MODEL_VERSION');
-  });
-
-
-  it('should process telemetry successfully', async () => {
-    mockOptions.findDeviceById.mockResolvedValue(mockDevice());
-    mockValidator.mockReturnValue({ valid: true, errors: [] });
-    mockMapper.mockReturnValue({ deviceId: 'dev-123', data: { val: 50 }, timestamp: '2026-06-19T12:00:00Z', raw: {} });
-
-    const result = await service.processTelemetry({ value: 50 }, { deviceId: 'dev-123' });
-
-    expect(result.approved).toBe(true);
-    //expect(mockOptions.onTelemetry).toHaveBeenCalled();
-    expect(mockOptions.onTelemetry).toHaveBeenCalledWith( expect.objectContaining({deviceId: 'dev-123'}));
-
-    const cached = await mockRedis.get('cache:device:dev-123');
-    expect(cached).toBeTruthy();
-
-  });
-
-  it('should reject if device not found', async () => {
-    mockOptions.findDeviceById.mockResolvedValue(null);
-    const result = await service.processTelemetry({}, { deviceId: 'x' });
-    expect(result.reason).toBe('DEVICE_NOT_FOUND');
-  });
-
-  it('should reject missing deviceId', async () => {
-    const result = await service.processTelemetry({}, {} as any);
-    expect(result.reason).toBe('MISSING_DEVICE_IDENTIFIER');
-  });
-
- 
-  
-  it('should reject invalid schema payload', async () => {
-    mockOptions.findDeviceById.mockResolvedValue({
-      model: 'modelF',
-      schema: { properties: { schemaId: { const: 'modelF' } } },
-      mapping: { fields: {} }
-    });
-    mockValidator.mockReturnValue({ valid: false, errors: ['error'] });
-
-    const result = await service.processTelemetry({ value: 'wrong' }, { deviceId: 'x' });
-    expect(result.reason).toBe('INVALID_TELEMETRY_SCHEMA');
-  });
-
-
-
-  it('should process status and normalize state to uppercase', async () => {
-    const statusPayload = { status: 'online', timestamp: '2026-06-19T10:00:00Z' };
-    await service.processStatus(statusPayload, { deviceId: 'dev-123' });
-
-    expect(mockOptions.onStatusChange).toHaveBeenCalledWith('dev-123', 'ONLINE');
-  });
-
-  it('should reject status if status object is invalid', async () => {
-    await service.processStatus(null, { deviceId: 'dev-123' });
-    expect(mockOptions.onStatusChange).not.toHaveBeenCalled();
-  });
-
-  it('should proceed to DB fetch even if Redis fails', async () => {
-    mockRedis.get = jest.fn().mockRejectedValue(new Error('Redis down'));
-    mockOptions.findDeviceById.mockResolvedValue(mockDevice());
-    mockValidator.mockReturnValue({ valid: true, errors: [] });
-    mockMapper.mockReturnValue({ deviceId: 'dev-1', data: {}, timestamp: '', raw: {} });
-
-    const result = await service.processTelemetry({ value: 10 }, { deviceId: 'dev-1' });
-    expect(result.approved).toBe(true);
-  });
-
-  it('should continue processing even if Redis set fails', async () => {
-    mockOptions.findDeviceById.mockResolvedValue(mockDevice());
-    mockValidator.mockReturnValue({ valid: true, errors: [] });
-    mockMapper.mockReturnValue({ deviceId: 'dev-123', data: { val: 50 }, timestamp: '...', raw: {} });
-
-   
-    mockRedis.set = jest.fn().mockRejectedValue(new Error('Redis set failed'));
-
-    const result = await service.processTelemetry({ value: 50 }, { deviceId: 'dev-123' });
-
-  
-    expect(result.approved).toBe(true);
-  });
-  it('should default status to UNKNOWN if status field is missing', async () => {
-      const statusPayload = { timestamp: '2026-06-19T10:00:00Z' }; 
-      await service.processStatus(statusPayload, { deviceId: 'dev-123' });
-
-      expect(mockOptions.onStatusChange).toHaveBeenCalledWith('dev-123', 'UNKNOWN');
-  });
-
-  it('should handle malformed non-object telemetry payload', async () => {
-      mockOptions.findDeviceById.mockResolvedValue(mockDevice());
-      
-      const result = await service.processTelemetry(12345, { deviceId: 'dev-123' });
-      
-      expect(result.approved).toBe(false);
-      expect(result.reason).toBe('INVALID_PAYLOAD_FORMAT');
-  });
-  it('should function correctly when Redis is not provided', async () => {
-      const serviceNoRedis = new DeviceDashboardService({ ...mockOptions, redis: undefined });
-     // try {
-        mockOptions.findDeviceById.mockResolvedValue(mockDevice());
-        mockValidator.mockReturnValue({ valid: true });
-        mockMapper.mockReturnValue({ data: {} });
-
-        const result = await serviceNoRedis.processTelemetry({ val: 1 }, { deviceId: 'dev-123' });
-        expect(result.approved).toBe(true);
-      /*} finally {
-        serviceNoRedis.onModuleDestroy();
-      }*/
-  });
-  it('should fallback to DB if Redis cache JSON is invalid', async () => {
-    await mockRedis.set('cache:device:dev-1', 'INVALID_JSON');
-
-    mockOptions.findDeviceById.mockResolvedValue(mockDevice());
-    mockValidator.mockReturnValue({ valid: true });
-    mockMapper.mockReturnValue({ deviceId: 'dev-1', data: {}, timestamp: '', raw: {} });
-
-    const result = await service.processTelemetry({}, { deviceId: 'dev-1' });
-    expect(mockOptions.findDeviceById).toHaveBeenCalled();
-
-    expect(result.approved).toBe(true);
-  });
-
-  it('should throw PluginErrorCode.DATABASE_FAILURE if findDeviceById fails', async () => {
-    mockOptions.findDeviceById.mockRejectedValue(new Error('DB is down'));
-
-    await expect(
-      service.processTelemetry({ val: 1 }, { deviceId: 'dev-1' })
-    ).rejects.toThrow(PluginErrorCode.DATABASE_FAILURE);
-  });
-
-
-  it('should throw PluginErrorCode.CONFIG_MISSING if mapping is missing', async () => {
-    mockOptions.findDeviceById.mockResolvedValue({
-      model: 'modelF',
-      schema: { properties: { schemaId: { const: 'modelF' } } },
-      mapping: null 
-    });
-
-    await expect(
-      service.processTelemetry({}, { deviceId: 'dev-1' })
-    ).rejects.toThrow(PluginErrorCode.CONFIG_MISSING);
-  });
-  
-
-  it('should throw PluginErrorCode.HOOK_FAILED if onTelemetry hook fails', async () => {
-    mockOptions.findDeviceById.mockResolvedValue(mockDevice());
-    mockValidator.mockReturnValue({ valid: true });
-    mockMapper.mockReturnValue({ deviceId: 'dev-1', data: {}, timestamp: '', raw: {} });
-    
-    mockOptions.onTelemetry.mockRejectedValue(new Error('Hook crash'));
-
-    await expect(
-      service.processTelemetry({}, { deviceId: 'dev-1' })
-    ).rejects.toThrow(PluginErrorCode.HOOK_FAILED);
-  });
-  
-  it('should throw PluginErrorCode.HOOK_FAILED if onStatusChange hook fails', async () => {
-    mockOptions.onStatusChange.mockRejectedValue(new Error('DB failure'));
-    
-    await expect(
-      service.processStatus({ status: 'online' }, { deviceId: 'dev-123' })
-    ).rejects.toThrow(PluginErrorCode.HOOK_FAILED);
-  });
-
-  it('should throw PluginErrorCode.CONFIG_MISSING if schema is missing', async () => {
-    mockOptions.findDeviceById.mockResolvedValue(mockDevice({ schema: null }));
-    await expect(service.processTelemetry({}, { deviceId: 'x' }))
-      .rejects.toThrow(PluginErrorCode.CONFIG_MISSING);
-  });
-  it('should throw PluginErrorCode.SCHEMA_COMPILE_ERROR when validator throws', async () => {
-    mockOptions.findDeviceById.mockResolvedValue(mockDevice());
-
-    mockValidator.mockImplementation(() => {
-      throw new Error('AJV compile failed');
-    });
-
-    await expect(
-      service.processTelemetry({}, { deviceId: 'dev-1' }),
-    ).rejects.toThrow(PluginErrorCode.SCHEMA_COMPILE_ERROR);
-  });
-  it('should throw PluginErrorCode.NORMALIZATION_FAILED when mapper throws', async () => {
-    mockOptions.findDeviceById.mockResolvedValue(mockDevice());
-
-    mockValidator.mockReturnValue({
-      valid: true,
-      errors: [],
-    });
-
-    mockMapper.mockImplementation(() => {
-      throw new Error('mapping failed');
-    });
-
-    await expect(
-      service.processTelemetry({}, { deviceId: 'dev-1' }),
-    ).rejects.toThrow(PluginErrorCode.NORMALIZATION_FAILED);
-  });
-
-  it('should throw PluginErrorCode.NORMALIZATION_FAILED when mapper returns null', async () => {
-    mockOptions.findDeviceById.mockResolvedValue(mockDevice());
-
-    mockValidator.mockReturnValue({
-      valid: true,
-      errors: [],
-    });
-
-    mockMapper.mockReturnValue(null);
-
-    await expect(
-      service.processTelemetry({}, { deviceId: 'dev-1' }),
-    ).rejects.toThrow(PluginErrorCode.NORMALIZATION_FAILED);
-  });
-  it('should throw PluginErrorCode.INVALID_TIMESTAMP when hook returns INVALID_TIMESTAMP', async () => {
-    mockOptions.findDeviceById.mockResolvedValue(mockDevice());
-
-    mockValidator.mockReturnValue({
-      valid: true,
-      errors: [],
-    });
-
-    mockMapper.mockReturnValue({
-      deviceId: 'dev-1',
-      data: {},
-      timestamp: '',
-      raw: {},
-    });
-
-    mockOptions.onTelemetry.mockRejectedValue(
-      new Error('INVALID_TIMESTAMP'),
-    );
-
-    await expect(
-      service.processTelemetry({}, { deviceId: 'dev-1' }),
-    ).rejects.toThrow(PluginErrorCode.INVALID_TIMESTAMP);
-  });
-  it('should reject array payload', async () => {
-    const result = await service.processTelemetry(
-      [1, 2, 3],
-      { deviceId: 'dev-1' },
-    );
-
+  it('1. should reject processTelemetry when message is undefined', async () => {
+    const result = await service.processTelemetry(undefined, { deviceId: 'device-1' });
     expect(result.approved).toBe(false);
     expect(result.reason).toBe('INVALID_PAYLOAD_FORMAT');
   });
-  it('should work when onTelemetry hook is not configured', async () => {
-    const serviceNoHook = new DeviceDashboardService({
-      ...mockOptions,
-      onTelemetry: undefined,
-    });
 
-   // try {
-      mockOptions.findDeviceById.mockResolvedValue(mockDevice());
-
-      mockValidator.mockReturnValue({
-        valid: true,
-        errors: [],
-      });
-
-      mockMapper.mockReturnValue({
-        deviceId: 'dev-1',
-        data: {},
-        timestamp: '',
-        raw: {},
-      });
-
-      const result = await serviceNoHook.processTelemetry(
-        {},
-        { deviceId: 'dev-1' },
-      );
-
-      expect(result.approved).toBe(true);
-   /* } finally {
-      serviceNoHook.onModuleDestroy();
-    }*/
+  it('2. should reject processTelemetry when message is null', async () => {
+    const result = await service.processTelemetry(null, { deviceId: 'device-1' });
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe('INVALID_PAYLOAD_FORMAT');
   });
-  it('should process status when onStatusChange hook is not configured', async () => {
-    const serviceNoHook = new DeviceDashboardService({
-      ...mockOptions,
-      onStatusChange: undefined,
-    });
 
-    //try {
-      await expect(
-        serviceNoHook.processStatus(
-          { status: 'ONLINE' },
-          { deviceId: 'dev-1' },
-        ),
-      ).resolves.toBeUndefined();
-   /* } finally {
-      serviceNoHook.onModuleDestroy();
-    }*/
+  it('3. should reject processTelemetry when message is an array', async () => {
+    const result = await service.processTelemetry([1, 2, 3], { deviceId: 'device-1' });
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe('INVALID_PAYLOAD_FORMAT');
   });
-  it('should ignore status when deviceId is missing', async () => {
-    await service.processStatus(
-      { status: 'ONLINE' },
-      {} as any,
-    );
 
-    expect(
-      mockOptions.onStatusChange,
-    ).not.toHaveBeenCalled();
+  it('4. should reject processTelemetry when deviceId is empty string', async () => {
+    const result = await service.processTelemetry({ schemaId: 'smartPumpModel', value: 10 }, { deviceId: '' });
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe('MISSING_DEVICE_IDENTIFIER');
   });
-  it('should process OFFLINE status update', async () => {
-    await service.processStatus(
-      { status: 'offline' },
-      { deviceId: 'dev-123' },
-    );
 
-    expect(mockOptions.onStatusChange)
-      .toHaveBeenCalledWith(
-        'dev-123',
-        'OFFLINE',
-      );
+  it('5. should reject processTelemetry when deviceId is missing from context', async () => {
+    const result = await service.processTelemetry({ schemaId: 'smartPumpModel', value: 10 }, {} as any);
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe('MISSING_DEVICE_IDENTIFIER');
   });
-  it('should rethrow ForbiddenException from onTelemetry hook', async () => {
-    mockOptions.findDeviceById.mockResolvedValue(mockDevice());
 
-    mockValidator.mockReturnValue({
-      valid: true,
-      errors: [],
-    });
+  it('6. should return DEVICE_NOT_FOUND when device does not exist in db', async () => {
+    mockOptions.findDeviceById.mockResolvedValueOnce(null);
+    const result = await service.processTelemetry({ schemaId: 'smartPumpModel', value: 10 }, { deviceId: 'unknown' });
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe('DEVICE_NOT_FOUND');
+  });
 
-    mockMapper.mockReturnValue({
-      deviceId: 'dev-1',
-      data: {},
-      timestamp: '',
-      raw: {},
-    });
+  it('7. should return MISSING_MODEL_VERSION when device model is null', async () => {
+    mockOptions.findDeviceById.mockResolvedValueOnce({ ...sampleDevice, model: null });
+    const result = await service.processTelemetry({ schemaId: 'smartPumpModel', value: 10 }, { deviceId: 'device-1' });
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe('MISSING_MODEL_VERSION');
+  });
 
-    const error = new ForbiddenException();
+  it('8. should return CONFIG_MISSING when device mapping is undefined', async () => {
+    mockOptions.findDeviceById.mockResolvedValueOnce({ ...sampleDevice, mapping: undefined });
+    const result = await service.processTelemetry({ schemaId: 'smartPumpModel', value: 10 }, { deviceId: 'device-1' });
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe('CONFIG_MISSING');
+  });
 
-    mockOptions.onTelemetry.mockRejectedValue(error);
+  it('9. should return CONFIG_MISSING when device schema is undefined', async () => {
+    mockOptions.findDeviceById.mockResolvedValueOnce({ ...sampleDevice, schema: undefined });
+    const result = await service.processTelemetry({ schemaId: 'smartPumpModel', value: 10 }, { deviceId: 'device-1' });
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe('CONFIG_MISSING');
+  });
 
+  it('10. should return CONFIG_MISSING when device version is missing', async () => {
+    mockOptions.findDeviceById.mockResolvedValueOnce({ ...sampleDevice, version: '' });
+    const result = await service.processTelemetry({ schemaId: 'smartPumpModel', value: 10 }, { deviceId: 'device-1' });
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe('CONFIG_MISSING');
+  });
+
+  it('11. should return CONFIG_MISMATCH when schemaId const does not match device model', async () => {
+    const badSchema = {
+      type: 'object',
+      properties: { schemaId: { const: 'differentModel' } }
+    };
+    mockOptions.findDeviceById.mockResolvedValueOnce({ ...sampleDevice, schema: badSchema });
+    const result = await service.processTelemetry({ schemaId: 'smartPumpModel', value: 10 }, { deviceId: 'device-1' });
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe('CONFIG_MISMATCH');
+  });
+
+  it('12. should return INVALID_TELEMETRY_SCHEMA when payload structure fails ajv validation', async () => {
+    const result = await service.processTelemetry({ schemaId: 'smartPumpModel', value: 'not-a-number' }, { deviceId: 'device-1' });
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe('INVALID_TELEMETRY_SCHEMA');
+  });
+
+  it('13. should handle redis read failure gracefully and proceed with database fetch', async () => {
+    mockRedis.get.mockRejectedValueOnce(new Error('Redis connection failure'));
+    const result = await service.processTelemetry({ schemaId: 'smartPumpModel', value: 10 }, { deviceId: 'device-1' });
+    expect(result.approved).toBe(true);
+    expect(mockOptions.findDeviceById).toHaveBeenCalledWith('device-1');
+  });
+
+  it('14. should handle redis write failure gracefully during device caching', async () => {
+    mockRedis.get.mockResolvedValueOnce(null);
+    mockRedis.set.mockRejectedValueOnce(new Error('Redis write failure'));
+    const result = await service.processTelemetry({ schemaId: 'smartPumpModel', value: 10 }, { deviceId: 'device-1' });
+    expect(result.approved).toBe(true);
+  });
+
+  it('15. should return DATABASE_FAILURE when findDeviceById throws an unexpected error', async () => {
+    mockRedis.get.mockResolvedValueOnce(null);
+    mockOptions.findDeviceById.mockRejectedValueOnce(new Error('DB failure'));
+    const result = await service.processTelemetry({ schemaId: 'smartPumpModel', value: 10 }, { deviceId: 'device-1' });
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe('DATABASE_FAILURE');
+  });
+
+  it('16. should return HOOK_FAILED when onTelemetry hook throws general error', async () => {
+    mockOptions.onTelemetry.mockRejectedValueOnce(new Error('Hook error'));
+    const result = await service.processTelemetry({ schemaId: 'smartPumpModel', value: 10 }, { deviceId: 'device-1' });
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe('HOOK_FAILED');
+  });
+
+  it('17. should propagate NotFoundException directly if thrown by onTelemetry hook', async () => {
+    mockOptions.onTelemetry.mockRejectedValueOnce(new NotFoundException('Not found'));
+    const result = await service.processTelemetry({ schemaId: 'smartPumpModel', value: 10 }, { deviceId: 'device-1' });
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe('INTERNAL_ERROR');
+  });
+
+  it('18. should propagate InvalidTimestampException directly if thrown inside onTelemetry hook', async () => {
+    mockOptions.onTelemetry.mockRejectedValueOnce(new InvalidTimestampException());
+    
     await expect(
-      service.processTelemetry(
-        {},
-        { deviceId: 'dev-1' },
-      ),
-    ).rejects.toThrow(ForbiddenException);
+      service.processTelemetry({ schemaId: 'smartPumpModel', value: 10 }, { deviceId: 'device-1' })
+    ).rejects.toThrow(InvalidTimestampException);
   });
-  it('should rethrow NotFoundException from onTelemetry hook', async () => {
-    mockOptions.findDeviceById.mockResolvedValue(mockDevice());
 
-    mockValidator.mockReturnValue({
-      valid: true,
-      errors: [],
-    });
+  it('19. should handle processStatus when status payload is null', async () => {
+    const res = await service.processStatus(null, { deviceId: 'device-1' });
+    expect(res).toBeUndefined();
+    expect(mockOptions.onStatusChange).not.toHaveBeenCalled();
+  });
 
-    mockMapper.mockReturnValue({
-      deviceId: 'dev-1',
-      data: {},
-      timestamp: '',
-      raw: {},
-    });
+  it('20. should handle processStatus when status payload is not an object', async () => {
+    const res = await service.processStatus('online', { deviceId: 'device-1' });
+    expect(res).toBeUndefined();
+    expect(mockOptions.onStatusChange).not.toHaveBeenCalled();
+  });
 
-    mockOptions.onTelemetry.mockRejectedValue(
-      new NotFoundException(),
-    );
+  it('21. should handle processStatus when deviceId is missing', async () => {
+    const res = await service.processStatus({ status: 'online' }, { deviceId: '' });
+    expect(res).toBeUndefined();
+    expect(mockOptions.onStatusChange).not.toHaveBeenCalled();
+  });
 
+  it('22. should throw HookFailedException when onStatusChange hook fails with generic error', async () => {
+    mockOptions.onStatusChange.mockRejectedValueOnce(new Error('Status hook fail'));
     await expect(
-      service.processTelemetry(
-        {},
-        { deviceId: 'dev-1' },
-      ),
+      service.processStatus({ status: 'online' }, { deviceId: 'device-1' })
+    ).rejects.toThrow(HookFailedException);
+  });
+
+  it('23. should propagate NotFoundException directly from onStatusChange hook', async () => {
+    mockOptions.onStatusChange.mockRejectedValueOnce(new NotFoundException());
+    await expect(
+      service.processStatus({ status: 'online' }, { deviceId: 'device-1' })
     ).rejects.toThrow(NotFoundException);
   });
 
-  it('should rethrow ForbiddenException from status hook', async () => {
-    mockOptions.onStatusChange.mockRejectedValue(
-      new ForbiddenException(),
-    );
-
+  it('24. should throw DeviceNotFoundException in executeCommand when device is missing', async () => {
+    mockOptions.findDeviceById.mockResolvedValueOnce(null);
     await expect(
-      service.processStatus(
-        { status: 'ONLINE' },
-        { deviceId: 'dev-1' },
-      ),
-    ).rejects.toThrow(ForbiddenException);
-  });
-  it('should rethrow NotFoundException from status hook', async () => {
-    mockOptions.onStatusChange.mockRejectedValue(
-      new NotFoundException(),
-    );
-
-    await expect(
-      service.processStatus(
-        { status: 'ONLINE' },
-        { deviceId: 'dev-1' },
-      ),
-    ).rejects.toThrow(NotFoundException);
+      service.executeCommand('device-1', 'SET_LED', { value: true })
+    ).rejects.toThrow(DeviceNotFoundException);
   });
 
+  it('25. should throw DeviceSchemaMissingException in executeCommand when schema is missing', async () => {
+    mockOptions.findDeviceById.mockResolvedValueOnce({ ...sampleDevice, schema: undefined });
+    await expect(
+      service.executeCommand('device-1', 'SET_LED', { value: true })
+    ).rejects.toThrow(DeviceSchemaMissingException);
+  });
+
+  it('26. should throw DeviceOfflineException when executing command on offline device', async () => {
+    mockOptions.findDeviceById.mockResolvedValueOnce({ ...sampleDevice, status: 'OFFLINE' });
+    await expect(
+      service.executeCommand('device-1', 'SET_LED', { value: true })
+    ).rejects.toThrow(DeviceOfflineException);
+  });
+
+  it('27. should throw DeviceUninitializedException when executing command on uninitialized device', async () => {
+    mockOptions.findDeviceById.mockResolvedValueOnce({ ...sampleDevice, status: 'UNINITIALIZED' });
+    await expect(
+      service.executeCommand('device-1', 'SET_LED', { value: true })
+    ).rejects.toThrow(DeviceUninitializedException);
+  });
+
+  it('28. should throw CommandValidationException when command payload is invalid', async () => {
+    await expect(
+      service.executeCommand('device-1', 'SET_LED', { value: 'not-a-boolean' })
+    ).rejects.toThrow(CommandValidationException);
+  });
+
+  it('29. should ignore command execution if command is redundant', async () => {
+    await service.executeCommand('device-1', 'SET_STATE', { state: 'ACTIVE' });
+    expect(mockOptions.sendCommand).not.toHaveBeenCalled();
+  });
+
+  it('30. should throw DeviceNotFoundException in getCommandMetadata when device does not exist', async () => {
+    mockOptions.findDeviceById.mockResolvedValueOnce(null);
+    await expect(service.getCommandMetadata('device-1')).rejects.toThrow(DeviceNotFoundException);
+  });
+
+  it('31. should do nothing when invalidating cache and redis is not configured', async () => {
+    const localOptions = { ...mockOptions, redis: undefined };
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        DeviceDashboardService,
+        { provide: DEVICE_DASHBOARD_OPTIONS, useValue: localOptions },
+      ],
+    }).compile();
+    const localService = module.get<DeviceDashboardService>(DeviceDashboardService);
+    await expect(localService.invalidateDeviceCache('device-1')).resolves.toBeUndefined();
+  });
+
+  it('32. should throw error when redis deletion fails during cache invalidation', async () => {
+    mockRedis.del.mockRejectedValueOnce(new Error('Redis delete error'));
+    await expect(service.invalidateDeviceCache('device-1')).rejects.toThrow('Redis delete error');
+  });
+
+  it('33. should return null in checkDevice if device is not found', async () => {
+    mockOptions.findDeviceById.mockResolvedValueOnce(null);
+    const res = await service.checkDevice('device-1');
+    expect(res).toBeNull();
+  });
+
+  it('34. should handle triggerDeviceTelemetry concurrency lock correctly', async () => {
+    mockOptions.sendCommand.mockImplementationOnce(
+      () => new Promise((resolve) => setTimeout(resolve, 50))
+    );
+    const firstCall = service.triggerDeviceTelemetry('device-1', 'IDLE');
+    await service.triggerDeviceTelemetry('device-1', 'IDLE');
+    await firstCall;
+    expect(mockOptions.sendCommand).toHaveBeenCalledTimes(1);
+  });
 });

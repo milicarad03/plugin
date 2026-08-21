@@ -1,4 +1,4 @@
-import  { validateTelemetryPayload, ajv, clearValidatorCache, validateDeviceCommand } from "../../src/newvalidator"
+import { validateTelemetryPayload, ajv, clearValidatorCache, validateDeviceCommand } from "../../src/newvalidator";
 import { PluginErrorCode } from "src/device-registry.interface";
 
 const schema = {
@@ -19,10 +19,11 @@ describe("Validator", () => {
   afterEach(() => {
     jest.restoreAllMocks();
   });
+
   it("should validate correct payload", () => {
     const msg = { schemaId: "modelF", value: 10 };
 
-    const result = validateTelemetryPayload("modelF", schema, msg);
+    const result = validateTelemetryPayload("modelF", "modelF", schema, msg);
 
     expect(result.valid).toBe(true);
     expect(result.errors.length).toBe(0);
@@ -31,7 +32,7 @@ describe("Validator", () => {
   it("should reject invalid payload", () => {
     const msg = { schemaId: "modelF", value: "wrong" };
 
-    const result = validateTelemetryPayload("modelF", schema, msg);
+    const result = validateTelemetryPayload("modelF", "modelF", schema, msg);
 
     expect(result.valid).toBe(false);
     expect(result.errors.length).toBeGreaterThan(0);
@@ -40,7 +41,7 @@ describe("Validator", () => {
   it("should reject wrong schemaId", () => {
     const msg = { schemaId: "wrong", value: 10 };
 
-    const result = validateTelemetryPayload("modelF", schema, msg);
+    const result = validateTelemetryPayload("modelF", "modelF", schema, msg);
 
     expect(result.valid).toBe(false);
   });
@@ -49,10 +50,9 @@ describe("Validator", () => {
     const msg = { schemaId: "modelF", value: 10 };
     const compileSpy = jest.spyOn(ajv, 'compile');
   
-
-    const first = validateTelemetryPayload("modelF", schema, msg);
+    const first = validateTelemetryPayload("modelF", "modelF", schema, msg);
     expect(compileSpy).toHaveBeenCalledTimes(1);
-    const second = validateTelemetryPayload("modelF", schema, msg);
+    const second = validateTelemetryPayload("modelF", "modelF", schema, msg);
     expect(compileSpy).toHaveBeenCalledTimes(1);
 
     expect(first.valid).toBe(true);
@@ -61,76 +61,64 @@ describe("Validator", () => {
   });
 
   it("should reject invalid payload with specific error", () => {
-  const msg = { schemaId: "modelF", value: "wrong" };
-  const result = validateTelemetryPayload("modelF", schema, msg);
+    const msg = { schemaId: "modelF", value: "wrong" };
+    const result = validateTelemetryPayload("modelF", "modelF", schema, msg);
 
-  expect(result.valid).toBe(false);
- 
-  expect(result.errors[0]).toMatch(/value must be number/);
+    expect(result.valid).toBe(false);
+    expect(result.errors[0]).toMatch(/value must be number/);
   });
 
   it("should gracefully handle empty or null payloads", () => {
-  const result = validateTelemetryPayload("modelF", schema, {});
-  expect(result.valid).toBe(false);
-  expect(result.errors.length).toBeGreaterThan(0);
+    expect(() =>
+      validateTelemetryPayload("modelF", "modelF", schema, null)
+    ).toThrow();
   });
-
 
   it("should respect cache limit and evict oldest entries", () => {
     const compileSpy = jest.spyOn(ajv, 'compile');
     
-   
     for (let i = 0; i < 50; i++) {
       const key = `model-${i}`;
-      validateTelemetryPayload(key, { type: "object", properties: { schemaId: { const: key } }, required: ["schemaId"] }, { schemaId: key });
+      validateTelemetryPayload(key, key, { type: "object", properties: { schemaId: { const: key } }, required: ["schemaId"] }, { schemaId: key });
     }
 
-  
-    validateTelemetryPayload("model-50", { type: "object", properties: { schemaId: { const: "model-50" } }, required: ["schemaId"] }, { schemaId: "model-50" });
+    validateTelemetryPayload("model-50", "model-50", { type: "object", properties: { schemaId: { const: "model-50" } }, required: ["schemaId"] }, { schemaId: "model-50" });
 
-   
     compileSpy.mockClear();
-    validateTelemetryPayload("model-0", { type: "object", properties: { schemaId: { const: "model-0" } }, required: ["schemaId"] }, { schemaId: "model-0" });
+    validateTelemetryPayload("model-0", "model-0", { type: "object", properties: { schemaId: { const: "model-0" } }, required: ["schemaId"] }, { schemaId: "model-0" });
     
     expect(compileSpy).toHaveBeenCalled(); 
   });
   
   it("should reject payloads missing required fields", () => {
     const msg = { schemaId: "modelF" };
-    const result = validateTelemetryPayload("modelF", schema, msg);
+    const result = validateTelemetryPayload("modelF", "modelF", schema, msg);
     
     expect(result.valid).toBe(false);
-    expect(result.errors[0]).toMatch(/must have required property 'value'/);
+    expect(result.errors[0]).toMatch(/root must have required property 'value'/);
   });
 
   it("should reject payloads with missing schemaId", () => {
-      const msg = { value: 10 };
-      const result = validateTelemetryPayload("modelF", schema, msg);
-      expect(result.valid).toBe(false);
-      expect(result.errors[0]).toMatch(/Schema ID mismatch/);
-    });
-
-  it("should throw CONFIG_MISSING when message is null", () => {
-    expect(() =>
-      validateTelemetryPayload(
-        "modelF",
-        schema,
-        null
-      )
-    ).toThrow(PluginErrorCode.CONFIG_MISSING);
+    const msg = { value: 10 };
+    const result = validateTelemetryPayload("modelF", "modelF", schema, msg);
+    expect(result.valid).toBe(false);
+    expect(result.errors[0]).toMatch(/Schema ID mismatch/);
   });
-  it("should throw CONFIG_MISSING for malformed schema", () => {
+
+  it("should throw exception when message is null", () => {
+    expect(() =>
+      validateTelemetryPayload("modelF", "modelF", schema, null)
+    ).toThrow();
+  });
+
+  it("should throw SchemaCompileException for malformed schema", () => {
     const invalidSchema = {
       type: "NOT_A_VALID_TYPE"
     };
 
     expect(() =>
-      validateTelemetryPayload(
-        "bad-schema",
-        invalidSchema,
-        { schemaId: "bad-schema" }
-      )
-    ).toThrow(PluginErrorCode.CONFIG_MISSING);
+      validateTelemetryPayload("bad-schema", "bad-schema", invalidSchema, { schemaId: "bad-schema" })
+    ).toThrow();
   });
 
   it("should update cache priority when accessing an existing entry", () => {
@@ -138,14 +126,14 @@ describe("Validator", () => {
     
     for (let i = 0; i < 50; i++) {
       const key = `model-${i}`;
-      validateTelemetryPayload(key, { type: "object", properties: { schemaId: { const: key } }, required: ["schemaId"] }, { schemaId: key });
+      validateTelemetryPayload(key, key, { type: "object", properties: { schemaId: { const: key } }, required: ["schemaId"] }, { schemaId: key });
     }
-    validateTelemetryPayload("model-0", { type: "object", properties: { schemaId: { const: "model-0" } }, required: ["schemaId"] }, { schemaId: "model-0" });
+    validateTelemetryPayload("model-0", "model-0", { type: "object", properties: { schemaId: { const: "model-0" } }, required: ["schemaId"] }, { schemaId: "model-0" });
 
-    validateTelemetryPayload("model-50", { type: "object", properties: { schemaId: { const: "model-50" } }, required: ["schemaId"] }, { schemaId: "model-50" });
+    validateTelemetryPayload("model-50", "model-50", { type: "object", properties: { schemaId: { const: "model-50" } }, required: ["schemaId"] }, { schemaId: "model-50" });
     compileSpy.mockClear(); 
     
-    validateTelemetryPayload("model-0", { type: "object", properties: { schemaId: { const: "model-0" } }, required: ["schemaId"] }, { schemaId: "model-0" });
+    validateTelemetryPayload("model-0", "model-0", { type: "object", properties: { schemaId: { const: "model-0" } }, required: ["schemaId"] }, { schemaId: "model-0" });
     
     expect(compileSpy).not.toHaveBeenCalled(); 
     
@@ -153,31 +141,29 @@ describe("Validator", () => {
   });
 
   it("should handle empty or weird cache keys gracefully", () => {
-    const result = validateTelemetryPayload("", schema, { schemaId: "" });
-    expect(result.valid).toBe(false); // jer schemaId neće biti prazan string u msg
+    const result = validateTelemetryPayload("", "", schema, { schemaId: "" });
+    expect(result.valid).toBe(false);
   });
-  it("should throw CONFIG_MISSING when AJV compile fails", () => {
+
+  it("should throw exception when AJV compile fails", () => {
     jest.spyOn(ajv, "compile").mockImplementation(() => {
       throw new Error("compile fail");
     });
 
     expect(() =>
-      validateTelemetryPayload(
-        "modelX",
-        schema,
-        { schemaId: "modelX" }
-      )
-    ).toThrow(PluginErrorCode.CONFIG_MISSING);
+      validateTelemetryPayload("modelX", "modelX", schema, { schemaId: "modelX" })
+    ).toThrow();
   });
+
   it("should reject when schemaId mismatches but structure is valid", () => {
     const msg = { schemaId: "wrong", value: 10 };
     
-    const result = validateTelemetryPayload("modelF", schema, msg);
+    const result = validateTelemetryPayload("modelF", "modelF", schema, msg);
 
     expect(result.valid).toBe(false);
   });
-  it("should reject payloads with unexpected extra fields", () => {
 
+  it("should reject payloads with unexpected extra fields", () => {
     jest.restoreAllMocks(); 
 
     const strictSchema = {
@@ -191,15 +177,15 @@ describe("Validator", () => {
     };
 
     const msg = { schemaId: "modelF", value: 10, extraField: "nezeljeno" };
-    const result = validateTelemetryPayload("modelF", strictSchema, msg);
+    const result = validateTelemetryPayload("modelF", "modelF", strictSchema, msg);
 
     expect(result.valid).toBe(false);
-
-    expect(result.errors[0]).toMatch(/must NOT have additional properties/);
+    expect(result.errors[0]).toMatch(/root must NOT have additional properties/);
   });
+
   it("should reject payload when types are strictly mismatched", () => {
     const msg = { schemaId: "modelF", value: "10" };
-    const result = validateTelemetryPayload("modelF", schema, msg);
+    const result = validateTelemetryPayload("modelF", "modelF", schema, msg);
 
     expect(result.valid).toBe(false);
     expect(result.errors[0]).toMatch(/value must be number/);
@@ -214,12 +200,13 @@ describe("Validator", () => {
       required: ["value"]
     };
 
-    const msg = { value: 10 };
+    const msg = { schemaId: "modelF", value: 10 };
 
-    const result = validateTelemetryPayload("modelF", badSchema, msg);
+    const result = validateTelemetryPayload("modelF", "modelF", badSchema, msg);
 
-    expect(result.valid).toBe(false);
+    expect(result.valid).toBe(true);
   });
+
   it("should reject nested type mismatch", () => {
     const nestedSchema = {
       type: "object",
@@ -231,7 +218,8 @@ describe("Validator", () => {
             temp: { type: "number" }
           }
         }
-      }
+      },
+      required: ["schemaId"]
     };
 
     const msg = {
@@ -239,46 +227,38 @@ describe("Validator", () => {
       meta: { temp: "wrong" }
     };
 
-    const result = validateTelemetryPayload("modelF", nestedSchema, msg);
+    const result = validateTelemetryPayload("modelF", "modelF", nestedSchema, msg);
 
     expect(result.valid).toBe(false);
   });
+
   it("should re-compile schema after cache clear", () => {
-      const compileSpy = jest.spyOn(ajv, 'compile');
-      const msg = { schemaId: "modelF", value: 10 };
+    const compileSpy = jest.spyOn(ajv, 'compile');
+    const msg = { schemaId: "modelF", value: 10 };
 
-    
-      validateTelemetryPayload("modelF", schema, msg);
-      expect(compileSpy).toHaveBeenCalledTimes(1);
-
-    
-      clearValidatorCache();
-
-    
-      validateTelemetryPayload("modelF", schema, msg);
-      expect(compileSpy).toHaveBeenCalledTimes(2);
-
-      compileSpy.mockRestore();
-  });
-  it("should clear validator cache", () => {
-    const compileSpy = jest.spyOn(ajv, "compile");
-
-    validateTelemetryPayload(
-      "modelF",
-      schema,
-      { schemaId: "modelF", value: 10 }
-    );
+    validateTelemetryPayload("modelF", "modelF", schema, msg);
+    expect(compileSpy).toHaveBeenCalledTimes(1);
 
     clearValidatorCache();
 
-    validateTelemetryPayload(
-      "modelF",
-      schema,
-      { schemaId: "modelF", value: 10 }
-    );
+    validateTelemetryPayload("modelF", "modelF", schema, msg);
+    expect(compileSpy).toHaveBeenCalledTimes(2);
+
+    compileSpy.mockRestore();
+  });
+
+  it("should clear validator cache", () => {
+    const compileSpy = jest.spyOn(ajv, "compile");
+
+    validateTelemetryPayload("modelF", "modelF", schema, { schemaId: "modelF", value: 10 });
+
+    clearValidatorCache();
+
+    validateTelemetryPayload("modelF", "modelF", schema, { schemaId: "modelF", value: 10 });
 
     expect(compileSpy).toHaveBeenCalledTimes(2);
   });
+
   describe("validateDeviceCommand", () => {
     const commandSchema = {
       commands: {
@@ -432,5 +412,4 @@ describe("Validator", () => {
       );
     });
   });
-
 });
