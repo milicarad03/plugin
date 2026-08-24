@@ -42,6 +42,207 @@ function resolveSchemaPath(schema: any, dottedPath: string): boolean {
   return true;
 }
 
+function hasOwn(value: Record<string, any>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function validateDashboardMapping(
+  schema: Record<string, any>,
+  mapping: Record<string, any>,
+  errors: string[],
+): void {
+  const dashboard = mapping.dashboard;
+
+  if (!isRecord(dashboard)) {
+    errors.push('DASHBOARD_MISSING');
+    return;
+  }
+
+  if (!Array.isArray(dashboard.sections) || dashboard.sections.length === 0) {
+    errors.push('DASHBOARD_SECTIONS_MISSING');
+    return;
+  }
+
+  const mappingFields = isRecord(mapping.fields)
+    ? new Set(Object.keys(mapping.fields))
+    : new Set<string>();
+  const commands = isRecord(schema.commands) ? schema.commands : {};
+  const sectionIds = new Set<string>();
+  const itemIds = new Set<string>();
+  const bindRequiredComponents = new Set([
+    'value-card',
+    'line-chart',
+    'table',
+  ]);
+  const commandRequiredComponents = new Set([
+    'switch',
+    'numeric-input',
+    'command-form',
+  ]);
+  const commandFieldRequiredComponents = new Set([
+    'switch',
+    'numeric-input',
+  ]);
+
+  dashboard.sections.forEach((section: unknown, sectionIndex: number) => {
+    if (!isRecord(section)) {
+      errors.push(`DASHBOARD_SECTION_INVALID: index ${sectionIndex}`);
+      return;
+    }
+
+    const sectionId =
+      typeof section.id === 'string' ? section.id.trim() : '';
+
+    if (!sectionId) {
+      errors.push(`DASHBOARD_SECTION_ID_INVALID: index ${sectionIndex}`);
+    } else if (sectionIds.has(sectionId)) {
+      errors.push(`DASHBOARD_SECTION_ID_DUPLICATE: '${sectionId}'`);
+    } else {
+      sectionIds.add(sectionId);
+    }
+
+    const sectionLabel = sectionId || `index ${sectionIndex}`;
+    const columns = section.columns;
+
+    if (!Number.isInteger(columns) || columns <= 0) {
+      errors.push(`DASHBOARD_COLUMNS_INVALID: section '${sectionLabel}'`);
+    }
+
+    if (!Array.isArray(section.items)) {
+      errors.push(`DASHBOARD_ITEMS_INVALID: section '${sectionLabel}'`);
+      return;
+    }
+
+    section.items.forEach((item: unknown, itemIndex: number) => {
+      if (!isRecord(item)) {
+        errors.push(
+          `DASHBOARD_ITEM_INVALID: section '${sectionLabel}', index ${itemIndex}`,
+        );
+        return;
+      }
+
+      const itemId = typeof item.id === 'string' ? item.id.trim() : '';
+
+      if (!itemId) {
+        errors.push(
+          `DASHBOARD_ITEM_ID_INVALID: section '${sectionLabel}', index ${itemIndex}`,
+        );
+      } else if (itemIds.has(itemId)) {
+        errors.push(`DASHBOARD_ITEM_ID_DUPLICATE: '${itemId}'`);
+      } else {
+        itemIds.add(itemId);
+      }
+
+      const itemLabel = itemId || `${sectionLabel}[${itemIndex}]`;
+      const component =
+        typeof item.component === 'string' ? item.component.trim() : '';
+
+      if (!component) {
+        errors.push(`DASHBOARD_COMPONENT_INVALID: item '${itemLabel}'`);
+      }
+
+      if (
+        item.colSpan !== undefined &&
+        (!Number.isInteger(item.colSpan) ||
+          item.colSpan <= 0 ||
+          (Number.isInteger(columns) && item.colSpan > columns))
+      ) {
+        errors.push(`DASHBOARD_COL_SPAN_INVALID: item '${itemLabel}'`);
+      }
+
+      const bind = typeof item.bind === 'string' ? item.bind.trim() : '';
+
+      if (bindRequiredComponents.has(component) && !bind) {
+        errors.push(`DASHBOARD_BIND_REQUIRED: item '${itemLabel}'`);
+      } else if (item.bind !== undefined && !bind) {
+        errors.push(`DASHBOARD_BIND_INVALID: item '${itemLabel}'`);
+      } else if (bind && !mappingFields.has(bind)) {
+        errors.push(
+          `DASHBOARD_BINDING_NOT_FOUND: item '${itemLabel}' -> '${bind}'`,
+        );
+      }
+
+      if (item.visibleWhen !== undefined) {
+        if (!isRecord(item.visibleWhen)) {
+          errors.push(`DASHBOARD_VISIBILITY_INVALID: item '${itemLabel}'`);
+        } else {
+          const visibilityBind =
+            typeof item.visibleWhen.bind === 'string'
+              ? item.visibleWhen.bind.trim()
+              : '';
+
+          if (!visibilityBind || !hasOwn(item.visibleWhen, 'equals')) {
+            errors.push(`DASHBOARD_VISIBILITY_INVALID: item '${itemLabel}'`);
+          } else if (!mappingFields.has(visibilityBind)) {
+            errors.push(
+              `DASHBOARD_VISIBILITY_BINDING_NOT_FOUND: item '${itemLabel}' -> '${visibilityBind}'`,
+            );
+          }
+        }
+      }
+
+      const command =
+        typeof item.command === 'string' ? item.command.trim() : '';
+
+      if (commandRequiredComponents.has(component) && !command) {
+        errors.push(`DASHBOARD_COMMAND_REQUIRED: item '${itemLabel}'`);
+      } else if (item.command !== undefined && !command) {
+        errors.push(`DASHBOARD_COMMAND_INVALID: item '${itemLabel}'`);
+      } else if (command && !isRecord(commands[command])) {
+        errors.push(
+          `DASHBOARD_COMMAND_NOT_FOUND: item '${itemLabel}' -> '${command}'`,
+        );
+      }
+
+      const commandField =
+        typeof item.commandField === 'string'
+          ? item.commandField.trim()
+          : '';
+
+      if (commandFieldRequiredComponents.has(component) && !commandField) {
+        errors.push(`DASHBOARD_COMMAND_FIELD_REQUIRED: item '${itemLabel}'`);
+      } else if (item.commandField !== undefined && !commandField) {
+        errors.push(`DASHBOARD_COMMAND_FIELD_INVALID: item '${itemLabel}'`);
+      } else if (commandField) {
+        const payloadProperties = commands[command]?.payload?.properties;
+
+        if (!command || !isRecord(payloadProperties) || !hasOwn(payloadProperties, commandField)) {
+          errors.push(
+            `DASHBOARD_COMMAND_FIELD_NOT_FOUND: item '${itemLabel}' -> '${commandField}'`,
+          );
+        }
+      }
+
+      for (const property of ['min', 'max', 'step']) {
+        const value = item[property];
+
+        if (
+          value !== undefined &&
+          (typeof value !== 'number' || !Number.isFinite(value))
+        ) {
+          errors.push(
+            `DASHBOARD_NUMERIC_CONSTRAINT_INVALID: item '${itemLabel}.${property}'`,
+          );
+        }
+      }
+
+      if (typeof item.step === 'number' && item.step <= 0) {
+        errors.push(
+          `DASHBOARD_NUMERIC_CONSTRAINT_INVALID: item '${itemLabel}.step'`,
+        );
+      }
+
+      if (
+        typeof item.min === 'number' &&
+        typeof item.max === 'number' &&
+        item.min > item.max
+      ) {
+        errors.push(`DASHBOARD_NUMERIC_RANGE_INVALID: item '${itemLabel}'`);
+      }
+    });
+  });
+}
+
 function validateCustomKeywords(value: unknown, path: string, errors: string[]): void {
   if (Array.isArray(value)) {
     value.forEach((item, index) => {
@@ -162,50 +363,47 @@ export function validateModelDefinition(
 
   if (!isRecord(mapping.fields) || Object.keys(mapping.fields).length === 0) {
     errors.push('MAPPING_FIELDS_MISSING');
-
-    return {
-      valid: errors.length === 0,
-      errors,
-    };
-  }
-
-  for (const [targetKey, definition] of Object.entries(mapping.fields)) {
-    if (!isRecord(definition)) {
-      errors.push(`MAPPING_FIELD_INVALID: '${targetKey}'`);
-      continue;
-    }
-
-    const path = definition.path;
-
-    if (typeof path !== 'string' || !path.trim()) {
-      errors.push(`MAPPING_PATH_MISSING: '${targetKey}'`);
-      continue;
-    }
-
-    if (!resolveSchemaPath(schema, path)) {
-      errors.push(`MAPPING_PATH_NOT_IN_SCHEMA: '${targetKey}' -> '${path}'`);
-    }
-
-    const historyPath = definition.historyPath;
-
-    if (historyPath !== undefined) {
-      if (typeof historyPath !== 'string' || !historyPath.trim()) {
-        errors.push(`HISTORY_PATH_INVALID: '${targetKey}'`);
-      } else if (!resolveSchemaPath(schema, historyPath)) {
-        errors.push(`HISTORY_PATH_NOT_IN_SCHEMA: '${targetKey}' -> '${historyPath}'`);
+  } else {
+    for (const [targetKey, definition] of Object.entries(mapping.fields)) {
+      if (!isRecord(definition)) {
+        errors.push(`MAPPING_FIELD_INVALID: '${targetKey}'`);
+        continue;
       }
-    }
 
-    const operation = definition.operation;
-    if (operation !== undefined) {
-      const allowedOperations = new Set(['array', 'min', 'max']);
-      if (typeof operation !== 'string' || !allowedOperations.has(operation)) {
-        errors.push(
-          `MAPPING_OPERATION_INVALID: '${targetKey}' has invalid operation '${operation}'`,
-        );
+      const path = definition.path;
+
+      if (typeof path !== 'string' || !path.trim()) {
+        errors.push(`MAPPING_PATH_MISSING: '${targetKey}'`);
+        continue;
+      }
+
+      if (!resolveSchemaPath(schema, path)) {
+        errors.push(`MAPPING_PATH_NOT_IN_SCHEMA: '${targetKey}' -> '${path}'`);
+      }
+
+      const historyPath = definition.historyPath;
+
+      if (historyPath !== undefined) {
+        if (typeof historyPath !== 'string' || !historyPath.trim()) {
+          errors.push(`HISTORY_PATH_INVALID: '${targetKey}'`);
+        } else if (!resolveSchemaPath(schema, historyPath)) {
+          errors.push(`HISTORY_PATH_NOT_IN_SCHEMA: '${targetKey}' -> '${historyPath}'`);
+        }
+      }
+
+      const operation = definition.operation;
+      if (operation !== undefined) {
+        const allowedOperations = new Set(['array', 'min', 'max']);
+        if (typeof operation !== 'string' || !allowedOperations.has(operation)) {
+          errors.push(
+            `MAPPING_OPERATION_INVALID: '${targetKey}' has invalid operation '${operation}'`,
+          );
+        }
       }
     }
   }
+
+  validateDashboardMapping(schema, mapping, errors);
 
   return {
     valid: errors.length === 0,

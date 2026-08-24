@@ -4,6 +4,17 @@ describe('validateModelDefinition', () => {
   const validSchema = {
     type: 'object',
     required: ['schemaId'],
+    commands: {
+      SET_FLOW_TARGET: {
+        payload: {
+          type: 'object',
+          required: ['target'],
+          properties: {
+            target: { type: 'number' },
+          },
+        },
+      },
+    },
     properties: {
       schemaId: {
         type: 'string',
@@ -48,6 +59,36 @@ describe('validateModelDefinition', () => {
         historyPath: 'historicalTelemetry.flowRate',
         operation: 'min',
       },
+    },
+    dashboard: {
+      sections: [
+        {
+          id: 'overview',
+          title: 'Overview',
+          columns: 2,
+          items: [
+            {
+              id: 'flow-rate',
+              component: 'value-card',
+              bind: 'flowRate',
+            },
+            {
+              id: 'flow-target',
+              component: 'numeric-input',
+              command: 'SET_FLOW_TARGET',
+              commandField: 'target',
+              min: 0,
+              max: 500,
+              step: 1,
+            },
+            {
+              id: 'flow-gauge',
+              component: 'oil-gauge',
+              bind: 'flowRate',
+            },
+          ],
+        },
+      ],
     },
   };
 
@@ -192,5 +233,182 @@ describe('validateModelDefinition', () => {
     );
     expect(resultBadPaths.errors).toContain("MAPPING_FIELD_INVALID: 'invalidDefinition'");
     expect(resultBadPaths.errors).toContain("MAPPING_PATH_MISSING: 'emptyPath'");
+  });
+
+  it('should require a dashboard with at least one section', () => {
+    const withoutDashboard = {
+      fields: validMapping.fields,
+    };
+    const withoutSections = {
+      ...validMapping,
+      dashboard: { sections: [] },
+    };
+
+    expect(
+      validateModelDefinition('smartPumpModel', validSchema, withoutDashboard).errors,
+    ).toContain('DASHBOARD_MISSING');
+    expect(
+      validateModelDefinition('smartPumpModel', validSchema, withoutSections).errors,
+    ).toContain('DASHBOARD_SECTIONS_MISSING');
+  });
+
+  it('should reject duplicate dashboard identifiers and invalid layout values', () => {
+    const invalidLayoutMapping = {
+      ...validMapping,
+      dashboard: {
+        sections: [
+          {
+            id: 'duplicate',
+            columns: 1,
+            items: [
+              {
+                id: 'same-item',
+                component: 'value-card',
+                bind: 'flowRate',
+              },
+            ],
+          },
+          {
+            id: 'duplicate',
+            columns: 0,
+            items: [
+              {
+                id: 'same-item',
+                component: 'value-card',
+                bind: 'flowRate',
+                colSpan: 2,
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    const result = validateModelDefinition(
+      'smartPumpModel',
+      validSchema,
+      invalidLayoutMapping,
+    );
+
+    expect(result.errors).toContain("DASHBOARD_SECTION_ID_DUPLICATE: 'duplicate'");
+    expect(result.errors).toContain("DASHBOARD_COLUMNS_INVALID: section 'duplicate'");
+    expect(result.errors).toContain("DASHBOARD_ITEM_ID_DUPLICATE: 'same-item'");
+    expect(result.errors).toContain("DASHBOARD_COL_SPAN_INVALID: item 'same-item'");
+  });
+
+  it('should validate dashboard bindings and visibility bindings', () => {
+    const invalidBindingMapping = {
+      ...validMapping,
+      dashboard: {
+        sections: [
+          {
+            id: 'overview',
+            columns: 1,
+            items: [
+              {
+                id: 'unknown-value',
+                component: 'value-card',
+                bind: 'missingField',
+                visibleWhen: {
+                  bind: 'missingCondition',
+                  equals: false,
+                },
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    const result = validateModelDefinition(
+      'smartPumpModel',
+      validSchema,
+      invalidBindingMapping,
+    );
+
+    expect(result.errors).toContain(
+      "DASHBOARD_BINDING_NOT_FOUND: item 'unknown-value' -> 'missingField'",
+    );
+    expect(result.errors).toContain(
+      "DASHBOARD_VISIBILITY_BINDING_NOT_FOUND: item 'unknown-value' -> 'missingCondition'",
+    );
+  });
+
+  it('should validate dashboard commands and command payload fields', () => {
+    const invalidCommandMapping = {
+      ...validMapping,
+      dashboard: {
+        sections: [
+          {
+            id: 'controls',
+            columns: 2,
+            items: [
+              {
+                id: 'unknown-command',
+                component: 'command-form',
+                command: 'DOES_NOT_EXIST',
+              },
+              {
+                id: 'unknown-field',
+                component: 'numeric-input',
+                command: 'SET_FLOW_TARGET',
+                commandField: 'missing',
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    const result = validateModelDefinition(
+      'smartPumpModel',
+      validSchema,
+      invalidCommandMapping,
+    );
+
+    expect(result.errors).toContain(
+      "DASHBOARD_COMMAND_NOT_FOUND: item 'unknown-command' -> 'DOES_NOT_EXIST'",
+    );
+    expect(result.errors).toContain(
+      "DASHBOARD_COMMAND_FIELD_NOT_FOUND: item 'unknown-field' -> 'missing'",
+    );
+  });
+
+  it('should reject invalid numeric constraints', () => {
+    const invalidNumericMapping = {
+      ...validMapping,
+      dashboard: {
+        sections: [
+          {
+            id: 'controls',
+            columns: 1,
+            items: [
+              {
+                id: 'flow-target',
+                component: 'numeric-input',
+                command: 'SET_FLOW_TARGET',
+                commandField: 'target',
+                min: 10,
+                max: 5,
+                step: 0,
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    const result = validateModelDefinition(
+      'smartPumpModel',
+      validSchema,
+      invalidNumericMapping,
+    );
+
+    expect(result.errors).toContain(
+      "DASHBOARD_NUMERIC_CONSTRAINT_INVALID: item 'flow-target.step'",
+    );
+    expect(result.errors).toContain(
+      "DASHBOARD_NUMERIC_RANGE_INVALID: item 'flow-target'",
+    );
   });
 });

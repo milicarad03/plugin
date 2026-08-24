@@ -24,13 +24,22 @@ export type DeviceTelemetry = {
 
 };
 
+export type CommandDispatchContext = {
+  correlationId?: string;
+};
+
 export type DeviceDashboardModuleOptions = {
  // brokerUrl: string;
   findDeviceById: (deviceId: string) => Promise<RegisteredDevice | null>;
   onTelemetry?:(telemetry:DeviceTelemetry)=> Promise <void> | void;
   redis? : any;
   onStatusChange?: (deviceId: string, status: string) => Promise<void>;
-  sendCommand: (deviceId: string, command: string, payload?: any) => Promise<void>;
+  sendCommand: (
+    deviceId: string,
+    command: string,
+    payload?: any,
+    context?: CommandDispatchContext,
+  ) => Promise<void>;
   getLatestTelemetry: (deviceId: string) => Promise<{ data: any } | null>;
  
 };

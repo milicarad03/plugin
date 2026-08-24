@@ -252,6 +252,22 @@ describe('DeviceDashboardService Integration Tests', () => {
       expect(sendCommand).toHaveBeenCalledWith('dev-1', 'SET_LED', { value: true });
     });
 
+    it('should forward command audit context to the host transport', async () => {
+      await service.executeCommand(
+        'dev-1',
+        'SET_LED',
+        { value: true },
+        { correlationId: 'audit-correlation-1' },
+      );
+
+      expect(sendCommand).toHaveBeenCalledWith(
+        'dev-1',
+        'SET_LED',
+        { value: true },
+        { correlationId: 'audit-correlation-1' },
+      );
+    });
+
     it('should throw DeviceNotFoundException for an unknown device', async () => {
       findDeviceById.mockResolvedValue(null);
 

@@ -4,6 +4,7 @@ import path from "path";
 import { Inject, Injectable, Logger, NotFoundException, ForbiddenException, HttpException} from "@nestjs/common";
 import {
   DEVICE_DASHBOARD_OPTIONS,
+  type CommandDispatchContext,
   type DeviceDashboardModuleOptions,
   type DeviceTelemetry,
 } from "../device-registry.interface";
@@ -388,8 +389,26 @@ export class DeviceDashboardService  {
   }
 
   private commandLock = new Map<string, boolean>();
+
+  private async dispatchCommand(
+    deviceId: string,
+    command: string,
+    payload: any,
+    context?: CommandDispatchContext,
+  ): Promise<void> {
+    if (context?.correlationId) {
+      await this.options.sendCommand(deviceId, command, payload, context);
+      return;
+    }
+
+    await this.options.sendCommand(deviceId, command, payload);
+  }
   
-  async triggerDeviceTelemetry(deviceId: string, state: 'ACTIVE' | 'IDLE') {
+  async triggerDeviceTelemetry(
+    deviceId: string,
+    state: 'ACTIVE' | 'IDLE',
+    context?: CommandDispatchContext,
+  ) {
 
     this.logger.warn(
         `[TRIGGER] device=${deviceId} requestedState=${state}`
@@ -418,12 +437,12 @@ export class DeviceDashboardService  {
       this.logger.log(`[CONTROL] Sending state change to ${state} for device ${deviceId}`);
       if (state === 'ACTIVE') {
         if(supportsSetMode){
-        await this.options.sendCommand(deviceId, 'SET_MODE', { value: 'RUNNING' });
+        await this.dispatchCommand(deviceId, 'SET_MODE', { value: 'RUNNING' }, context);
         await new Promise(resolve => setTimeout(resolve, 500)); 
         }
-        await this.options.sendCommand(deviceId, 'SET_STATE', { state: 'ACTIVE' });
+        await this.dispatchCommand(deviceId, 'SET_STATE', { state: 'ACTIVE' }, context);
       } else {
-        await this.options.sendCommand(deviceId, 'SET_STATE', { state: 'IDLE' });
+        await this.dispatchCommand(deviceId, 'SET_STATE', { state: 'IDLE' }, context);
       }
     }catch (err:any) {
 
@@ -438,7 +457,12 @@ export class DeviceDashboardService  {
     }
   }
 
-  async executeCommand( deviceId: string, command: string, payload: any ) {
+  async executeCommand(
+    deviceId: string,
+    command: string,
+    payload: any,
+    context?: CommandDispatchContext,
+  ) {
     const device = await this.options.findDeviceById(deviceId);
 
     this.validateDevice(device, deviceId);
@@ -467,11 +491,12 @@ export class DeviceDashboardService  {
     if (command === "SET_STATE") {
       return this.triggerDeviceTelemetry(
         deviceId,
-        payload.state
+        payload.state,
+        context,
       );
     }
 
-    await this.options.sendCommand( deviceId, command, payload);
+    await this.dispatchCommand(deviceId, command, payload, context);
   }
 
   private extractFields( schema: any, prefix = "", required: string[] = []): any[] {
