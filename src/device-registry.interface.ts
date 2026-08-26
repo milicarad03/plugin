@@ -24,6 +24,8 @@ export type DeviceTelemetry = {
 
 };
 
+export type DeviceAttributes = Record<string, unknown>;
+
 export type CommandDispatchContext = {
   correlationId?: string;
 };
@@ -32,6 +34,10 @@ export type DeviceDashboardModuleOptions = {
  // brokerUrl: string;
   findDeviceById: (deviceId: string) => Promise<RegisteredDevice | null>;
   onTelemetry?:(telemetry:DeviceTelemetry)=> Promise <void> | void;
+  onAttributes?: (
+    deviceId: string,
+    attributes: DeviceAttributes,
+  ) => Promise<void> | void;
   redis? : any;
   onStatusChange?: (deviceId: string, status: string) => Promise<void>;
   sendCommand: (

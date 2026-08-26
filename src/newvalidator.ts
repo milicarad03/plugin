@@ -87,6 +87,39 @@ export function validateTelemetryPayload(   expectedSchemaId: string, cacheKey: 
 
   }
 }
+
+export function validateAttributesPayload(
+  cacheKey: string,
+  schema: object,
+  message: unknown,
+): { valid: boolean; errors: string[] } {
+  try {
+    const validate = getValidator(
+      `${cacheKey}:attributes`,
+      schema,
+    );
+    const valid = validate(message);
+
+    if (valid) {
+      return { valid: true, errors: [] };
+    }
+
+    return {
+      valid: false,
+      errors:
+        validate.errors?.map((error: any) => {
+          const field = error.instancePath || 'attributes';
+          return `${field} ${error.message}`;
+        }) ?? [],
+    };
+  } catch (error: any) {
+    logger.error(
+      `[VALIDATOR] Failed compiling attributes schema ${cacheKey}: ${error.message}`,
+    );
+    throw new SchemaCompileException();
+  }
+}
+
 export function validateDeviceCommand( schema: any, command: string, payload: any): { valid: boolean; errors: string[]; } {
 
   const commandDefinition = schema?.commands?.[command];

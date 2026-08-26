@@ -15,6 +15,7 @@ describe('DeviceDashboardService Integration Tests', () => {
   let createdServices: DeviceDashboardService[];
 
   let onTelemetry: jest.Mock;
+  let onAttributes: jest.Mock;
   let onStatusChange: jest.Mock;
   let sendCommand: jest.Mock;
   let findDeviceById: jest.Mock;
@@ -31,6 +32,9 @@ describe('DeviceDashboardService Integration Tests', () => {
       fields: {
         temperature: { path: 'temperature' },
         led: { path: 'led' },
+        serialNumber: { path: 'attributes.serialNumber' },
+        firmware: { path: 'attributes.firmware' },
+        hardwareModel: { path: 'attributes.hardwareModel' },
       },
     },
     schema: {
@@ -39,6 +43,16 @@ describe('DeviceDashboardService Integration Tests', () => {
         schemaId: { const: 'LED_V1' },
         temperature: { type: 'number' },
         led: { type: 'boolean' },
+        attributes: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['serialNumber', 'firmware', 'hardwareModel'],
+          properties: {
+            serialNumber: { type: 'string' },
+            firmware: { type: 'string' },
+            hardwareModel: { type: 'string' },
+          },
+        },
       },
       required: ['temperature'],
       commands: {
@@ -79,6 +93,7 @@ describe('DeviceDashboardService Integration Tests', () => {
     clearValidatorCache();
 
     onTelemetry = jest.fn();
+    onAttributes = jest.fn();
     onStatusChange = jest.fn();
     sendCommand = jest.fn();
     getLatestTelemetry = jest.fn().mockResolvedValue(null);
@@ -93,10 +108,111 @@ describe('DeviceDashboardService Integration Tests', () => {
     service = makeService({
       findDeviceById,
       onTelemetry,
+      onAttributes,
       onStatusChange,
       sendCommand,
       getLatestTelemetry,
       redis: mockRedis,
+    });
+  });
+
+  describe('processAttributes', () => {
+    const validAttributes = {
+      serialNumber: 'dev-1',
+      firmware: '1.0.0',
+      hardwareModel: 'LED_V1',
+    };
+
+    it('validates, maps and forwards a complete attributes snapshot', async () => {
+      const result = await service.processAttributes(
+        validAttributes,
+        { deviceId: 'dev-1', transport: 'mqtt' },
+      );
+
+      expect(result).toEqual({ approved: true });
+      expect(onAttributes).toHaveBeenCalledWith(
+        'dev-1',
+        validAttributes,
+      );
+      expect(onTelemetry).not.toHaveBeenCalled();
+    });
+
+    it('rejects attributes with a missing required field', async () => {
+      const result = await service.processAttributes(
+        {
+          serialNumber: 'dev-1',
+          firmware: '1.0.0',
+        },
+        { deviceId: 'dev-1', transport: 'mqtt' },
+      );
+
+      expect(result).toEqual({
+        approved: false,
+        reason: 'INVALID_ATTRIBUTES_SCHEMA',
+      });
+      expect(onAttributes).not.toHaveBeenCalled();
+    });
+
+    it('rejects attributes with an invalid field type', async () => {
+      const result = await service.processAttributes(
+        {
+          ...validAttributes,
+          firmware: 113,
+        },
+        { deviceId: 'dev-1', transport: 'mqtt' },
+      );
+
+      expect(result.reason).toBe('INVALID_ATTRIBUTES_SCHEMA');
+      expect(onAttributes).not.toHaveBeenCalled();
+    });
+
+    it('rejects attributes not declared by the model schema', async () => {
+      const result = await service.processAttributes(
+        {
+          ...validAttributes,
+          unsupportedAttribute: true,
+        },
+        { deviceId: 'dev-1', transport: 'mqtt' },
+      );
+
+      expect(result.reason).toBe('INVALID_ATTRIBUTES_SCHEMA');
+      expect(onAttributes).not.toHaveBeenCalled();
+    });
+
+    it('rejects attributes whose serial number differs from the topic', async () => {
+      const result = await service.processAttributes(
+        {
+          ...validAttributes,
+          serialNumber: 'another-device',
+        },
+        { deviceId: 'dev-1', transport: 'mqtt' },
+      );
+
+      expect(result.reason).toBe('ATTRIBUTES_ID_MISMATCH');
+      expect(onAttributes).not.toHaveBeenCalled();
+    });
+
+    it('rejects attributes for an unknown device', async () => {
+      findDeviceById.mockResolvedValue(null);
+
+      const result = await service.processAttributes(
+        validAttributes,
+        { deviceId: 'dev-1', transport: 'mqtt' },
+      );
+
+      expect(result.reason).toBe('DEVICE_NOT_FOUND');
+      expect(onAttributes).not.toHaveBeenCalled();
+    });
+
+    it('rejects attributes when the host persistence hook fails', async () => {
+      onAttributes.mockRejectedValue(new Error('DATABASE_WRITE_FAILED'));
+
+      const result = await service.processAttributes(
+        validAttributes,
+        { deviceId: 'dev-1', transport: 'mqtt' },
+      );
+
+      expect(result.reason).toBe('HOOK_FAILED');
     });
   });
 
@@ -387,6 +503,7 @@ describe('DeviceDashboardService Integration Tests', () => {
     it('should return subscription topics', () => {
       const topics = service.getSubscriptionTopics();
       expect(topics).toContain('iot/devices/+/telemetry');
+      expect(topics).toContain('iot/devices/+/attributes');
     });
   });
 

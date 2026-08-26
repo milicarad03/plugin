@@ -328,4 +328,80 @@ describe('DeviceDashboardService - Comprehensive Negative & Edge Case Scenarios'
     await firstCall;
     expect(mockOptions.sendCommand).toHaveBeenCalledTimes(1);
   });
+  it('37. should reject processAttributes when attributes schema is missing', async () => {
+    const deviceWithoutAttrSchema = {
+      ...sampleDevice,
+      schema: {
+        type: 'object',
+        properties: {
+          schemaId: { const: 'smartPumpModel' }
+          // nema 'attributes'
+        }
+      }
+    };
+    mockOptions.findDeviceById.mockResolvedValueOnce(deviceWithoutAttrSchema);
+    
+    const result = await service.processAttributes({ serialNumber: 'device-1', firmware: '1.1.4' }, { deviceId: 'device-1' });
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe('ATTRIBUTES_SCHEMA_MISSING');
+  });
+
+  it('38. should reject processAttributes when serialNumber does not match deviceId', async () => {
+    const deviceWithSchema = {
+      ...sampleDevice,
+      serialNumber: 'device-1',
+      schema: {
+        type: 'object',
+        properties: {
+          schemaId: { const: 'smartPumpModel' },
+          attributes: {
+            type: 'object',
+            properties: { serialNumber: { type: 'string' }, firmware: { type: 'string' } },
+            required: ['serialNumber', 'firmware']
+          }
+        }
+      }
+    };
+    mockOptions.findDeviceById.mockResolvedValueOnce(deviceWithSchema);
+
+    const result = await service.processAttributes(
+      { serialNumber: 'wrong-id', firmware: '1.1.4' }, 
+      { deviceId: 'device-1' }
+    );
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe('ATTRIBUTES_ID_MISMATCH');
+  });
+
+  it('39. should successfully process valid attributes and call onAttributes', async () => {
+    const deviceWithAttrMapping = {
+      ...sampleDevice,
+      serialNumber: 'device-1',
+      schema: {
+        type: 'object',
+        properties: {
+          schemaId: { const: 'smartPumpModel' },
+          attributes: {
+            type: 'object',
+            properties: { serialNumber: { type: 'string' }, firmware: { type: 'string' } },
+            required: ['serialNumber', 'firmware']
+          }
+        }
+      },
+      mapping: {
+        fields: {
+          firmware: { path: 'attributes.firmware' }
+        }
+      }
+    };
+    mockOptions.findDeviceById.mockResolvedValueOnce(deviceWithAttrMapping);
+    mockOptions.onAttributes = jest.fn().mockResolvedValue(undefined);
+
+    const result = await service.processAttributes(
+      { serialNumber: 'device-1', firmware: '1.1.4' }, 
+      { deviceId: 'device-1' }
+    );
+
+    expect(result.approved).toBe(true);
+    expect(mockOptions.onAttributes).toHaveBeenCalledWith('device-1', { firmware: '1.1.4' });
+  });
 });

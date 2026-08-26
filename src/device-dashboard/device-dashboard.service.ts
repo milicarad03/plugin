@@ -5,11 +5,16 @@ import { Inject, Injectable, Logger, NotFoundException, ForbiddenException, Http
 import {
   DEVICE_DASHBOARD_OPTIONS,
   type CommandDispatchContext,
+  type DeviceAttributes,
   type DeviceDashboardModuleOptions,
   type DeviceTelemetry,
 } from "../device-registry.interface";
 
-import { validateTelemetryPayload, validateDeviceCommand } from "src/newvalidator";
+import {
+  validateAttributesPayload,
+  validateTelemetryPayload,
+  validateDeviceCommand,
+} from "src/newvalidator";
 
 import { LazyModuleLoader } from "@nestjs/core";
 import { normalizeWithMapping } from "src/mapping-normalizer";
@@ -160,6 +165,27 @@ export class DeviceDashboardService  {
       ) {
         throw err;
       }
+      throw new HookFailedException();
+    }
+  }
+
+  private async forwardAttributes(
+    deviceId: string,
+    attributes: DeviceAttributes,
+  ) {
+    if (!this.options.onAttributes) {
+      this.logger.error(
+        `[HOOK] onAttributes is not configured for device ${deviceId}`,
+      );
+      throw new HookFailedException();
+    }
+
+    try {
+      await this.options.onAttributes(deviceId, attributes);
+    } catch (err: any) {
+      this.logger.error(
+        `[HOOK] onAttributes failed for ${deviceId}: ${err.message}`,
+      );
       throw new HookFailedException();
     }
   }
@@ -345,6 +371,123 @@ export class DeviceDashboardService  {
 
       this.logger.error(`[UNHANDLED] Unexpected error for device ${deviceId}: ${error.message}`);
       return { approved: false, reason: "INTERNAL_ERROR" };
+    }
+  }
+
+  async processAttributes(
+    message: unknown,
+    context: TelemetryContext,
+  ): Promise<{ approved: boolean; reason?: string }> {
+    const attributes = this.asRecord(message);
+
+    if (!attributes) {
+      return { approved: false, reason: 'INVALID_ATTRIBUTES_FORMAT' };
+    }
+
+    const deviceId = context.deviceId?.trim();
+
+    if (!deviceId) {
+      return { approved: false, reason: 'MISSING_DEVICE_IDENTIFIER' };
+    }
+
+    try {
+      const device = await this.loadDevice(deviceId);
+
+      if (!device) {
+        return { approved: false, reason: 'DEVICE_NOT_FOUND' };
+      }
+
+      if (!device.model) {
+        return { approved: false, reason: 'MISSING_MODEL_VERSION' };
+      }
+
+      this.validateDeviceConfiguration(device, deviceId);
+
+      const attributesSchema =
+        device.schema?.properties?.attributes;
+
+      if (!this.asRecord(attributesSchema)) {
+        return { approved: false, reason: 'ATTRIBUTES_SCHEMA_MISSING' };
+      }
+
+      const validation = validateAttributesPayload(
+        `${device.model}:${device.version}`,
+        attributesSchema,
+        attributes,
+      );
+
+      if (!validation.valid) {
+        this.logger.warn(
+          `[ATTRIBUTES] Invalid payload for ${deviceId}: ${JSON.stringify(validation.errors)}`,
+        );
+        return { approved: false, reason: 'INVALID_ATTRIBUTES_SCHEMA' };
+      }
+
+      if (
+        attributes.serialNumber !== deviceId ||
+        attributes.serialNumber !== device.serialNumber
+      ) {
+        this.logger.warn(
+          `[ATTRIBUTES] Serial number mismatch for topic device ${deviceId}`,
+        );
+        return { approved: false, reason: 'ATTRIBUTES_ID_MISMATCH' };
+      }
+
+      const attributeFields = Object.fromEntries(
+        Object.entries<any>(device.mapping?.fields ?? {}).filter(
+          ([, definition]) =>
+            typeof definition?.path === 'string' &&
+            definition.path.startsWith('attributes.'),
+        ),
+      );
+
+      if (Object.keys(attributeFields).length === 0) {
+        return { approved: false, reason: 'ATTRIBUTES_MAPPING_MISSING' };
+      }
+
+      const normalized = this.normalizeTelemetry(
+        { attributes },
+        deviceId,
+        { fields: attributeFields },
+      );
+
+      if (Object.keys(normalized.data).length === 0) {
+        return { approved: false, reason: 'NORMALIZATION_FAILED' };
+      }
+
+      await this.forwardAttributes(deviceId, normalized.data);
+
+      return { approved: true };
+    } catch (error: any) {
+      this.logger.error(
+        `[ATTRIBUTES] Processing failed for ${deviceId}: ${error.message}`,
+      );
+
+      if (error instanceof ConfigMissingException) {
+        return { approved: false, reason: 'CONFIG_MISSING' };
+      }
+
+      if (error instanceof ConfigMismatchException) {
+        return { approved: false, reason: 'CONFIG_MISMATCH' };
+      }
+
+      if (error instanceof SchemaCompileException) {
+        return { approved: false, reason: 'SCHEMA_COMPILE_ERROR' };
+      }
+
+      if (error instanceof DatabaseFailureException) {
+        return { approved: false, reason: 'DATABASE_FAILURE' };
+      }
+
+      if (error instanceof NormalizationFailedException) {
+        return { approved: false, reason: 'NORMALIZATION_FAILED' };
+      }
+
+      if (error instanceof HookFailedException) {
+        return { approved: false, reason: 'HOOK_FAILED' };
+      }
+
+      return { approved: false, reason: 'INTERNAL_ERROR' };
     }
   }
 
@@ -626,6 +769,7 @@ export class DeviceDashboardService  {
     return [
       "iot/devices/+/telemetry",
       "iot/devices/+/status",
+      "iot/devices/+/attributes",
     ];
   }
 

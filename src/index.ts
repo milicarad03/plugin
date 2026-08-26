@@ -5,6 +5,7 @@ export type { DeviceTelemetry } from "./MqttDevicePlugin";
 export {'DEVICE_DASHBOARD_OPTIONS'} from "./device-registry.interface"
 export type {
   CommandDispatchContext,
+  DeviceAttributes,
   DeviceRegistry,
   RegisteredDevice,
 } from "./device-registry.interface"
