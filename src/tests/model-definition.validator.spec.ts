@@ -6,6 +6,12 @@ describe('validateModelDefinition', () => {
     required: ['schemaId'],
     commands: {
       SET_FLOW_TARGET: {
+        'x-idempotency': {
+          stateBinding: 'flowRate',
+          payloadPath: 'target',
+          maxAgeMs: 15000,
+          epsilon: 0.01,
+        },
         payload: {
           type: 'object',
           required: ['target'],
@@ -409,6 +415,46 @@ describe('validateModelDefinition', () => {
     );
     expect(result.errors).toContain(
       "DASHBOARD_NUMERIC_RANGE_INVALID: item 'flow-target'",
+    );
+  });
+
+  it('should validate command idempotency bindings and payload paths', () => {
+    const invalidSchema = {
+      ...validSchema,
+      commands: {
+        SET_FLOW_TARGET: {
+          ...validSchema.commands.SET_FLOW_TARGET,
+          'x-idempotency': {
+            stateBinding: 'missingBinding',
+            payloadPath: 'missingPayloadField',
+            maxAgeMs: 0,
+            epsilon: -1,
+            unsupported: true,
+          },
+        },
+      },
+    };
+
+    const result = validateModelDefinition(
+      'smartPumpModel',
+      invalidSchema,
+      validMapping,
+    );
+
+    expect(result.errors).toContain(
+      "COMMAND_IDEMPOTENCY_STATE_BINDING_NOT_FOUND: 'SET_FLOW_TARGET' -> 'missingBinding'",
+    );
+    expect(result.errors).toContain(
+      "COMMAND_IDEMPOTENCY_PAYLOAD_PATH_NOT_FOUND: 'SET_FLOW_TARGET' -> 'missingPayloadField'",
+    );
+    expect(result.errors).toContain(
+      "COMMAND_IDEMPOTENCY_MAX_AGE_INVALID: 'SET_FLOW_TARGET'",
+    );
+    expect(result.errors).toContain(
+      "COMMAND_IDEMPOTENCY_EPSILON_INVALID: 'SET_FLOW_TARGET'",
+    );
+    expect(result.errors).toContain(
+      "COMMAND_IDEMPOTENCY_PROPERTY_INVALID: 'SET_FLOW_TARGET.unsupported'",
     );
   });
 });

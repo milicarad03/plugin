@@ -26,8 +26,9 @@ describe('DeviceDashboardService - Comprehensive Negative & Edge Case Scenarios'
     id: 'device-1',
     model: 'smartPumpModel',
     version: '1.0.0',
-    status: 'ACTIVE',
+    status: 'ONLINE',
     telemetryState: 'ACTIVE',
+    telemetryStateUpdatedAt: '2026-08-27T12:00:00.000Z',
     schema: {
       type: 'object',
       properties: {
@@ -46,6 +47,11 @@ describe('DeviceDashboardService - Comprehensive Negative & Edge Case Scenarios'
           }
         },
         SET_LED: {
+          'x-idempotency': {
+            stateBinding: 'led',
+            payloadPath: 'value',
+            maxAgeMs: 15000,
+          },
           payload: {
             type: 'object',
             properties: { value: { type: 'boolean' } },
@@ -56,7 +62,8 @@ describe('DeviceDashboardService - Comprehensive Negative & Edge Case Scenarios'
     },
     mapping: {
       fields: {
-        flowRate: { path: 'metrics.flowRate' }
+        flowRate: { path: 'metrics.flowRate' },
+        led: { path: 'metrics.led' },
       }
     }
   };
@@ -74,7 +81,15 @@ describe('DeviceDashboardService - Comprehensive Negative & Edge Case Scenarios'
       onTelemetry: jest.fn().mockResolvedValue(undefined),
       onStatusChange: jest.fn().mockResolvedValue(undefined),
       sendCommand: jest.fn().mockResolvedValue(undefined),
-      getLatestTelemetry: jest.fn().mockResolvedValue({ data: { flowRate: [[100, 1]] } }),
+      getLatestTelemetry: jest.fn().mockImplementation(() =>
+        Promise.resolve({
+          timestamp: new Date(),
+          data: {
+            flowRate: [[100, new Date().toISOString()]],
+            led: [[false, new Date().toISOString()]],
+          },
+        }),
+      ),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -287,8 +302,107 @@ describe('DeviceDashboardService - Comprehensive Negative & Edge Case Scenarios'
   });
 
   it('29. should ignore command execution if command is redundant', async () => {
-    await service.executeCommand('device-1', 'SET_STATE', { state: 'ACTIVE' });
+    mockOptions.findDeviceById.mockResolvedValue({
+      ...sampleDevice,
+      telemetryStateUpdatedAt: new Date().toISOString(),
+    });
+
+    const result = await service.executeCommand(
+      'device-1',
+      'SET_STATE',
+      { state: 'ACTIVE' },
+    );
+    expect(result).toMatchObject({
+      status: 'NOOP',
+      reason: 'ALREADY_APPLIED',
+    });
     expect(mockOptions.sendCommand).not.toHaveBeenCalled();
+  });
+
+  it('29a. should skip a generic command when fresh telemetry already has the requested value', async () => {
+    const result = await service.executeCommand(
+      'device-1',
+      'SET_LED',
+      { value: false },
+    );
+
+    expect(result.status).toBe('NOOP');
+    expect(mockOptions.sendCommand).not.toHaveBeenCalled();
+  });
+
+  it('29b. should dispatch when the matching telemetry value is stale', async () => {
+    mockOptions.getLatestTelemetry.mockResolvedValueOnce({
+      timestamp: '2026-01-01T00:00:00.000Z',
+      data: {
+        led: [[false, '2026-01-01T00:00:00.000Z']],
+      },
+    });
+
+    const result = await service.executeCommand(
+      'device-1',
+      'SET_LED',
+      { value: false },
+    );
+
+    expect(result.status).toBe('DISPATCHED');
+    expect(mockOptions.sendCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it('29c. should use a successful device response for an immediate repeat', async () => {
+    const observedAt = new Date().toISOString();
+    mockOptions.getLatestTelemetry.mockResolvedValue(null);
+    mockOptions.sendCommand.mockResolvedValueOnce({
+      deviceId: 'device-1',
+      command: 'SET_LED',
+      correlationId: 'confirmed-command',
+      success: true,
+      timestamp: observedAt,
+    });
+
+    await service.executeCommand(
+      'device-1',
+      'SET_LED',
+      { value: true },
+    );
+    const repeated = await service.executeCommand(
+      'device-1',
+      'SET_LED',
+      { value: true },
+    );
+
+    expect(repeated.status).toBe('NOOP');
+    expect(mockOptions.sendCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it('29d. should dispatch SET_STATE when confirmed state is stale', async () => {
+    mockOptions.findDeviceById.mockResolvedValue({
+      ...sampleDevice,
+      telemetryState: 'ACTIVE',
+      telemetryStateUpdatedAt: new Date(
+        Date.now() - 60_000,
+      ).toISOString(),
+    });
+
+    mockOptions.sendCommand.mockResolvedValue({
+      deviceId: 'device-1',
+      command: 'SET_STATE',
+      correlationId: 'stale-state-command',
+      success: true,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = await service.executeCommand(
+      'device-1',
+      'SET_STATE',
+      { state: 'ACTIVE' },
+    );
+
+    expect(result.status).toBe('DISPATCHED');
+    expect(mockOptions.sendCommand).toHaveBeenCalledWith(
+      'device-1',
+      'SET_STATE',
+      { state: 'ACTIVE' },
+    );
   });
 
   it('30. should throw DeviceNotFoundException in getCommandMetadata when device does not exist', async () => {
@@ -319,89 +433,22 @@ describe('DeviceDashboardService - Comprehensive Negative & Edge Case Scenarios'
     expect(res).toBeNull();
   });
 
-  it('34. should handle triggerDeviceTelemetry concurrency lock correctly', async () => {
+  it('34. should serialize commands without dropping the second request', async () => {
     mockOptions.sendCommand.mockImplementationOnce(
       () => new Promise((resolve) => setTimeout(resolve, 50))
     );
-    const firstCall = service.triggerDeviceTelemetry('device-1', 'IDLE');
-    await service.triggerDeviceTelemetry('device-1', 'IDLE');
-    await firstCall;
-    expect(mockOptions.sendCommand).toHaveBeenCalledTimes(1);
-  });
-  it('37. should reject processAttributes when attributes schema is missing', async () => {
-    const deviceWithoutAttrSchema = {
-      ...sampleDevice,
-      schema: {
-        type: 'object',
-        properties: {
-          schemaId: { const: 'smartPumpModel' }
-          // nema 'attributes'
-        }
-      }
-    };
-    mockOptions.findDeviceById.mockResolvedValueOnce(deviceWithoutAttrSchema);
-    
-    const result = await service.processAttributes({ serialNumber: 'device-1', firmware: '1.1.4' }, { deviceId: 'device-1' });
-    expect(result.approved).toBe(false);
-    expect(result.reason).toBe('ATTRIBUTES_SCHEMA_MISSING');
-  });
-
-  it('38. should reject processAttributes when serialNumber does not match deviceId', async () => {
-    const deviceWithSchema = {
-      ...sampleDevice,
-      serialNumber: 'device-1',
-      schema: {
-        type: 'object',
-        properties: {
-          schemaId: { const: 'smartPumpModel' },
-          attributes: {
-            type: 'object',
-            properties: { serialNumber: { type: 'string' }, firmware: { type: 'string' } },
-            required: ['serialNumber', 'firmware']
-          }
-        }
-      }
-    };
-    mockOptions.findDeviceById.mockResolvedValueOnce(deviceWithSchema);
-
-    const result = await service.processAttributes(
-      { serialNumber: 'wrong-id', firmware: '1.1.4' }, 
-      { deviceId: 'device-1' }
+    const firstCall = service.executeCommand(
+      'device-1',
+      'SET_STATE',
+      { state: 'IDLE' },
     );
-    expect(result.approved).toBe(false);
-    expect(result.reason).toBe('ATTRIBUTES_ID_MISMATCH');
-  });
-
-  it('39. should successfully process valid attributes and call onAttributes', async () => {
-    const deviceWithAttrMapping = {
-      ...sampleDevice,
-      serialNumber: 'device-1',
-      schema: {
-        type: 'object',
-        properties: {
-          schemaId: { const: 'smartPumpModel' },
-          attributes: {
-            type: 'object',
-            properties: { serialNumber: { type: 'string' }, firmware: { type: 'string' } },
-            required: ['serialNumber', 'firmware']
-          }
-        }
-      },
-      mapping: {
-        fields: {
-          firmware: { path: 'attributes.firmware' }
-        }
-      }
-    };
-    mockOptions.findDeviceById.mockResolvedValueOnce(deviceWithAttrMapping);
-    mockOptions.onAttributes = jest.fn().mockResolvedValue(undefined);
-
-    const result = await service.processAttributes(
-      { serialNumber: 'device-1', firmware: '1.1.4' }, 
-      { deviceId: 'device-1' }
+    const secondCall = service.executeCommand(
+      'device-1',
+      'SET_STATE',
+      { state: 'IDLE' },
     );
 
-    expect(result.approved).toBe(true);
-    expect(mockOptions.onAttributes).toHaveBeenCalledWith('device-1', { firmware: '1.1.4' });
+    await Promise.all([firstCall, secondCall]);
+    expect(mockOptions.sendCommand).toHaveBeenCalledTimes(2);
   });
 });

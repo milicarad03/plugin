@@ -14,7 +14,9 @@ export type RegisteredDevice = {
 
   schema?: any;   
   mapping?: any;
-  status?:any
+  status?: 'UNINITIALIZED' | 'ONLINE' | 'OFFLINE' | string;
+  telemetryState?: 'ACTIVE' | 'IDLE';
+  telemetryStateUpdatedAt?: string | Date | null;
 
 };
 export type DeviceTelemetry = {
@@ -29,6 +31,27 @@ export type DeviceAttributes = Record<string, unknown>;
 export type CommandDispatchContext = {
   correlationId?: string;
 };
+
+export type DeviceCommandResponse = {
+  deviceId: string;
+  command: string;
+  correlationId?: string;
+  success: boolean;
+  timestamp?: string;
+  error?: string;
+  [key: string]: unknown;
+};
+
+export type CommandExecutionResult =
+  | {
+      status: 'DISPATCHED';
+      response?: DeviceCommandResponse;
+    }
+  | {
+      status: 'NOOP';
+      reason: 'ALREADY_APPLIED';
+      observedAt?: string;
+    };
 
 export type DeviceDashboardModuleOptions = {
  // brokerUrl: string;
@@ -45,8 +68,11 @@ export type DeviceDashboardModuleOptions = {
     command: string,
     payload?: any,
     context?: CommandDispatchContext,
-  ) => Promise<void>;
-  getLatestTelemetry: (deviceId: string) => Promise<{ data: any } | null>;
+  ) => Promise<DeviceCommandResponse | void>;
+  getLatestTelemetry: (deviceId: string) => Promise<{
+    data: any;
+    timestamp?: string | Date;
+  } | null>;
  
 };
 export interface DeviceRegistry {

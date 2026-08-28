@@ -13,9 +13,9 @@ function isRecord(value: unknown): value is Record<string, any> {
   );
 }
 
-function resolveSchemaPath(schema: any, dottedPath: string): boolean {
+function resolveSchemaNode(schema: any, dottedPath: string): any | null {
   if (typeof dottedPath !== 'string' || !dottedPath.trim()) {
-    return false;
+    return null;
   }
 
   const segments = dottedPath.split('.').filter(Boolean);
@@ -36,14 +36,142 @@ function resolveSchemaPath(schema: any, dottedPath: string): boolean {
       continue;
     }
 
-    return false;
+    return null;
   }
 
-  return true;
+  return current;
+}
+
+function resolveSchemaPath(schema: any, dottedPath: string): boolean {
+  return resolveSchemaNode(schema, dottedPath) !== null;
 }
 
 function hasOwn(value: Record<string, any>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function validateCommandIdempotency(
+  schema: Record<string, any>,
+  mapping: Record<string, any>,
+  errors: string[],
+): void {
+  if (!isRecord(schema.commands)) {
+    return;
+  }
+
+  const mappingFields = isRecord(mapping.fields)
+    ? new Set(Object.keys(mapping.fields))
+    : new Set<string>();
+
+  for (const [commandName, commandDefinition] of Object.entries(
+    schema.commands,
+  )) {
+    if (!isRecord(commandDefinition)) {
+      continue;
+    }
+
+    const idempotency = commandDefinition['x-idempotency'];
+
+    if (idempotency === undefined) {
+      continue;
+    }
+
+    if (!isRecord(idempotency)) {
+      errors.push(`COMMAND_IDEMPOTENCY_INVALID: '${commandName}'`);
+      continue;
+    }
+
+    const stateBinding =
+      typeof idempotency.stateBinding === 'string'
+        ? idempotency.stateBinding.trim()
+        : '';
+    const payloadPath =
+      typeof idempotency.payloadPath === 'string'
+        ? idempotency.payloadPath.trim()
+        : '';
+
+    if (!stateBinding) {
+      errors.push(
+        `COMMAND_IDEMPOTENCY_STATE_BINDING_INVALID: '${commandName}'`,
+      );
+    } else if (!mappingFields.has(stateBinding)) {
+      errors.push(
+        `COMMAND_IDEMPOTENCY_STATE_BINDING_NOT_FOUND: '${commandName}' -> '${stateBinding}'`,
+      );
+    } else if (payloadPath) {
+      const mappingDefinition = mapping.fields[stateBinding];
+      const stateNode = resolveSchemaNode(
+        schema,
+        mappingDefinition?.path,
+      );
+      const payloadNode = resolveSchemaNode(
+        commandDefinition.payload,
+        payloadPath,
+      );
+      const stateType =
+        mappingDefinition?.operation === 'min' ||
+        mappingDefinition?.operation === 'max'
+          ? 'number'
+          : stateNode?.type;
+
+      if (
+        typeof stateType === 'string' &&
+        typeof payloadNode?.type === 'string' &&
+        stateType !== payloadNode.type
+      ) {
+        errors.push(
+          `COMMAND_IDEMPOTENCY_TYPE_MISMATCH: '${commandName}' state '${stateType}' payload '${payloadNode.type}'`,
+        );
+      }
+    }
+
+    if (!payloadPath) {
+      errors.push(
+        `COMMAND_IDEMPOTENCY_PAYLOAD_PATH_INVALID: '${commandName}'`,
+      );
+    } else if (
+      !resolveSchemaPath(commandDefinition.payload, payloadPath)
+    ) {
+      errors.push(
+        `COMMAND_IDEMPOTENCY_PAYLOAD_PATH_NOT_FOUND: '${commandName}' -> '${payloadPath}'`,
+      );
+    }
+
+    if (
+      !Number.isInteger(idempotency.maxAgeMs) ||
+      idempotency.maxAgeMs <= 0
+    ) {
+      errors.push(
+        `COMMAND_IDEMPOTENCY_MAX_AGE_INVALID: '${commandName}'`,
+      );
+    }
+
+    if (
+      idempotency.epsilon !== undefined &&
+      (typeof idempotency.epsilon !== 'number' ||
+        !Number.isFinite(idempotency.epsilon) ||
+        idempotency.epsilon < 0)
+    ) {
+      errors.push(
+        `COMMAND_IDEMPOTENCY_EPSILON_INVALID: '${commandName}'`,
+      );
+    }
+
+    const allowedKeys = new Set([
+      'stateBinding',
+      'payloadPath',
+      'maxAgeMs',
+      'epsilon',
+    ]);
+
+    for (const key of Object.keys(idempotency)) {
+      if (!allowedKeys.has(key)) {
+        errors.push(
+          `COMMAND_IDEMPOTENCY_PROPERTY_INVALID: '${commandName}.${key}'`,
+        );
+      }
+    }
+  }
 }
 
 function validateDashboardMapping(
@@ -335,6 +463,7 @@ export function validateModelDefinition(
     ajv.addKeyword('commands');
     ajv.addKeyword('x-reporting');
     ajv.addKeyword('x-buffering');
+    ajv.addKeyword('x-idempotency');
 
     ajv.compile(schema);
   } catch (error: any) {
@@ -344,6 +473,7 @@ export function validateModelDefinition(
   }
 
   validateCustomKeywords(schema, 'schema', errors);
+  validateCommandIdempotency(schema, mapping, errors);
 
   const schemaId = schema?.properties?.schemaId?.const;
 

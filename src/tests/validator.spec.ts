@@ -411,5 +411,78 @@ describe("Validator", () => {
         "payload"
       );
     });
+
+    it("should reuse cached validator for the same command and model version", () => {
+      const compileSpy = jest.spyOn(ajv, "compile");
+
+      const first = validateDeviceCommand(
+        commandSchema,
+        "SET_LED",
+        { value: true },
+        "modelA:1.0.0",
+      );
+
+      const second = validateDeviceCommand(
+        commandSchema,
+        "SET_LED",
+        { value: false },
+        "modelA:1.0.0",
+      );
+
+      expect(first.valid).toBe(true);
+      expect(second.valid).toBe(true);
+      expect(compileSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("should keep separate cached validators for different commands and model versions", () => {
+      const compileSpy = jest.spyOn(ajv, "compile");
+
+      validateDeviceCommand(
+        commandSchema,
+        "SET_LED",
+        { value: true },
+        "modelA:1.0.0",
+      );
+
+      validateDeviceCommand(
+        commandSchema,
+        "SET_MODE",
+        { mode: "AUTO" },
+        "modelA:1.0.0",
+      );
+
+      validateDeviceCommand(
+        commandSchema,
+        "SET_LED",
+        { value: false },
+        "modelA:2.0.0",
+      );
+
+      expect(compileSpy).toHaveBeenCalledTimes(3);
+    });
+
+    it("should recompile command validator after cache clear", () => {
+      const compileSpy = jest.spyOn(ajv, "compile");
+
+      validateDeviceCommand(
+        commandSchema,
+        "SET_LED",
+        { value: true },
+        "modelA:1.0.0",
+      );
+
+      expect(compileSpy).toHaveBeenCalledTimes(1);
+
+      clearValidatorCache();
+
+      validateDeviceCommand(
+        commandSchema,
+        "SET_LED",
+        { value: false },
+        "modelA:1.0.0",
+      );
+
+      expect(compileSpy).toHaveBeenCalledTimes(2);
+    });
   });
 });

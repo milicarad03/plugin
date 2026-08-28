@@ -57,6 +57,11 @@ describe('DeviceDashboardService Integration Tests', () => {
       required: ['temperature'],
       commands: {
         SET_LED: {
+          'x-idempotency': {
+            stateBinding: 'led',
+            payloadPath: 'value',
+            maxAgeMs: 15000,
+          },
           payload: {
             type: 'object',
             properties: { value: { type: 'boolean' } },
@@ -382,6 +387,28 @@ describe('DeviceDashboardService Integration Tests', () => {
         { value: true },
         { correlationId: 'audit-correlation-1' },
       );
+    });
+
+    it('should return NOOP without forwarding a redundant command', async () => {
+      const observedAt = new Date().toISOString();
+      getLatestTelemetry.mockResolvedValueOnce({
+        timestamp: observedAt,
+        data: {
+          led: [[true, observedAt]],
+        },
+      });
+
+      const result = await service.executeCommand(
+        'dev-1',
+        'SET_LED',
+        { value: true },
+      );
+
+      expect(result).toMatchObject({
+        status: 'NOOP',
+        reason: 'ALREADY_APPLIED',
+      });
+      expect(sendCommand).not.toHaveBeenCalled();
     });
 
     it('should throw DeviceNotFoundException for an unknown device', async () => {

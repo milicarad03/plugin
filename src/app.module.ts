@@ -2,11 +2,20 @@ import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { DeviceDashboardModule } from './device-dashboard/device-dashboard.module';
-import { DeviceDashboardService } from './device-dashboard/device-dashboard.service';
 
 @Module({
-  imports: [DeviceDashboardModule],
+  imports: [
+    DeviceDashboardModule.register({
+      findDeviceById: async () => null,
+      sendCommand: async (deviceId, command, payload) => ({
+        deviceId,
+        command,
+        success: true,
+      }),
+      getLatestTelemetry: async () => null,
+    }),
+  ],
   controllers: [AppController],
-  providers: [AppService, DeviceDashboardService],
+  providers: [AppService],
 })
 export class AppModule {}
