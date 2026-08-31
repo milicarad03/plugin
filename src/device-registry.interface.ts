@@ -1,14 +1,9 @@
 import { MappingDefinition } from "src/mapping-normalizer";
-
-
-
 export type RegisteredDevice = {
   id: string;
   serialNumber: string;
   name?: string | null;
   type?: string | null;
-
- // modelVersionId?: string | null;
   model?: string | null;
   version?: string | null;
 
@@ -54,7 +49,6 @@ export type CommandExecutionResult =
     };
 
 export type DeviceDashboardModuleOptions = {
- // brokerUrl: string;
   findDeviceById: (deviceId: string) => Promise<RegisteredDevice | null>;
   onTelemetry?:(telemetry:DeviceTelemetry)=> Promise <void> | void;
   onAttributes?: (

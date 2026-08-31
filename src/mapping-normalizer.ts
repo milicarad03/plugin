@@ -22,9 +22,6 @@ export const logger = {
   debug: (msg: string) => console.debug(msg),
 };
 
-/*
- * Pomoćna funkcija za bezbedno izvlačenje vrednosti iz objekta po dotted path-u
- */
 function getValueByPath(obj: any, path: string): any {
   if (!obj || typeof path !== 'string' || !path.trim()) {
     return undefined;
@@ -52,15 +49,11 @@ function getValueByPath(obj: any, path: string): any {
   return current;
 }
 
-/*
- * Pomoćna funkcija za izvlačenje čisto numeričkih vrednosti iz niza.
- * Rukuje i sa obično numeričkim nizovima [1, 2] i sa tuple nizovima [[val, timestamp], ...]
- */
+
 function extractNumericValues(arr: unknown[]): number[] {
   return arr
     .filter((item) => item !== null && item !== undefined && item !== '')
     .map((item) => {
-      // Ako je item ugnježdeni niz [value, timestamp], uzmi prvi element
       if (Array.isArray(item)) {
         return item.length > 0 ? Number(item[0]) : NaN;
       }
@@ -120,7 +113,6 @@ export function normalizeWithMapping(
           data[targetKey] = rawVal;
         }
     } else {
-      // Podrazumevano ponašanje (vraca ceo objekat/niz/primitivu)
       data[targetKey] = rawVal;
     }
   }

@@ -1,6 +1,12 @@
+
+
 import { DynamicModule, Module, Provider, Type } from '@nestjs/common';
 import { DeviceDashboardController } from './device-dashboard.controller';
 import { DeviceDashboardService } from './device-dashboard.service';
+import { CommandRedundancyService } from './command-redundancy.service';
+import { DeviceCommandService } from './device-command.service';
+import { DeviceIngestionService } from './device-ingestion.service';
+import { DeviceProfileService } from './device-profile.service';
 import {
   DEVICE_DASHBOARD_OPTIONS,
   DeviceDashboardModuleOptions,
@@ -16,21 +22,6 @@ export type DeviceDashboardModuleAsyncOptions = {
 
 @Module({})
 export class DeviceDashboardModule {
-  static register(options: DeviceDashboardModuleOptions): DynamicModule {
-    return {
-      module: DeviceDashboardModule,
-      controllers: [DeviceDashboardController],
-      providers: [
-        {
-          provide: DEVICE_DASHBOARD_OPTIONS,
-          useValue: options,
-        },
-        DeviceDashboardService,
-      ],
-      exports: [DeviceDashboardService],
-    };
-  }
-
   static registerAsync(options: DeviceDashboardModuleAsyncOptions): DynamicModule {
     const optionsProvider: Provider = {
       provide: DEVICE_DASHBOARD_OPTIONS,
@@ -42,7 +33,14 @@ export class DeviceDashboardModule {
       module: DeviceDashboardModule,
       imports: options.imports ?? [],
       controllers: [DeviceDashboardController],
-      providers: [optionsProvider, DeviceDashboardService],
+      providers: [
+        optionsProvider,
+        CommandRedundancyService,
+        DeviceProfileService,
+        DeviceIngestionService,
+        DeviceCommandService,
+        DeviceDashboardService,
+      ],
       exports: [DeviceDashboardService],
     };
   }

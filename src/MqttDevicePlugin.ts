@@ -1,5 +1,4 @@
 import mqtt, { MqttClient } from "mqtt";
-//import type { DeviceRegistry } from "./device-registry.interface";
 import type { RegisteredDevice } from "./device-registry.interface";
 export type DeviceTelemetry = {
   deviceId: string;
