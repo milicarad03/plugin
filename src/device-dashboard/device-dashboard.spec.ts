@@ -253,6 +253,25 @@ describe('DeviceDashboardService - Comprehensive Negative & Edge Case Scenarios'
     expect(mockOptions.onStatusChange).not.toHaveBeenCalled();
   });
 
+  it('should refresh presence without clearing command redundancy on heartbeat', async () => {
+    const clearDevice = jest.spyOn(
+      (service as any).redundancy,
+      'clearDevice',
+    );
+
+    await service.processStatus(
+      { status: 'online', heartbeat: true },
+      { deviceId: 'device-1' },
+    );
+
+    expect(clearDevice).not.toHaveBeenCalled();
+    expect(mockOptions.onStatusChange).toHaveBeenCalledWith(
+      'device-1',
+      'ONLINE',
+      { heartbeat: true },
+    );
+  });
+
   it('22. should throw HookFailedException when onStatusChange hook fails with generic error', async () => {
     mockOptions.onStatusChange.mockRejectedValueOnce(new Error('Status hook fail'));
     await expect(

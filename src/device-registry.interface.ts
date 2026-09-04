@@ -1,4 +1,7 @@
 import { MappingDefinition } from "src/mapping-normalizer";
+
+
+
 export type RegisteredDevice = {
   id: string;
   serialNumber: string;
@@ -22,6 +25,10 @@ export type DeviceTelemetry = {
 };
 
 export type DeviceAttributes = Record<string, unknown>;
+
+export type DeviceStatusContext = {
+  heartbeat?: boolean;
+};
 
 export type CommandDispatchContext = {
   correlationId?: string;
@@ -56,7 +63,11 @@ export type DeviceDashboardModuleOptions = {
     attributes: DeviceAttributes,
   ) => Promise<void> | void;
   redis? : any;
-  onStatusChange?: (deviceId: string, status: string) => Promise<void>;
+  onStatusChange?: (
+    deviceId: string,
+    status: string,
+    context?: DeviceStatusContext,
+  ) => Promise<void>;
   sendCommand: (
     deviceId: string,
     command: string,

@@ -54,6 +54,7 @@ function extractNumericValues(arr: unknown[]): number[] {
   return arr
     .filter((item) => item !== null && item !== undefined && item !== '')
     .map((item) => {
+
       if (Array.isArray(item)) {
         return item.length > 0 ? Number(item[0]) : NaN;
       }
@@ -113,6 +114,7 @@ export function normalizeWithMapping(
           data[targetKey] = rawVal;
         }
     } else {
+
       data[targetKey] = rawVal;
     }
   }

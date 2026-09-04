@@ -1,7 +1,5 @@
-import { DeviceDashboardRepository } from "./device-dashboard/device-dashboard.repository";
 import { MqttDevicePlugin } from "./MqttDevicePlugin";
 
-import type { DeviceRegistry } from "./device-registry.interface";
 import {RegisteredDevice} from "./device-registry.interface"
 
  const findDeviceById = async (

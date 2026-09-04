@@ -294,8 +294,11 @@ export class DeviceIngestionService {
     const normalizedStatus = String(
       statusObject.status ?? 'unknown',
     ).toUpperCase();
+    const isHeartbeat = statusObject.heartbeat === true;
 
-    this.redundancy.clearDevice(deviceId);
+    if (!isHeartbeat) {
+      this.redundancy.clearDevice(deviceId);
+    }
     this.logger.log(
       `[STATUS LOG] Device: ${deviceId} changed state -> ${normalizedStatus}`,
     );
@@ -305,7 +308,13 @@ export class DeviceIngestionService {
     }
 
     try {
-      await this.options.onStatusChange(deviceId, normalizedStatus);
+      if (isHeartbeat) {
+        await this.options.onStatusChange(deviceId, normalizedStatus, {
+          heartbeat: true,
+        });
+      } else {
+        await this.options.onStatusChange(deviceId, normalizedStatus);
+      }
       this.logger.debug(
         `[STATUS] Status hook successfully executed for device: ${deviceId}`,
       );

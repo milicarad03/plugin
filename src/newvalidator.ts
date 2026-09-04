@@ -207,11 +207,6 @@ export function validateDeviceCommand(
     };
   }
 
-  /*
-   * In production the caller supplies model:version.
-   * The fallback keeps direct/unit-test usage safe even when no explicit
-   * model-version key is supplied.
-   */
   const cacheKey =
     validatorCacheKey ??
     `${

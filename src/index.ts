@@ -9,6 +9,7 @@ export type {
   DeviceAttributes,
   DeviceCommandResponse,
   DeviceRegistry,
+  DeviceStatusContext,
   RegisteredDevice,
 } from "./device-registry.interface"
 export { DeviceCoreService } from './device.core.service';
